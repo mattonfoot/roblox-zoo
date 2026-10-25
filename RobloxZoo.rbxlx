@@ -2134,7 +2134,10 @@ end
 local CollectionService = game:GetService("CollectionService")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ProximityPromptService = game:GetService("ProximityPromptService")
+local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
 
 local Config = require(ReplicatedStorage.Shared.Config)
 
@@ -2338,9 +2341,10 @@ local toastList = create("Frame", {
 	BackgroundTransparency = 1,
 	AnchorPoint = Vector2.new(0.5, 1),
 	Position = UDim2.new(0.5, 0, 1, -90),
-	Size = UDim2.fromOffset(420, 300),
+	Size = UDim2.new(0.9, 0, 0, 300),
 	Parent = screen,
 }, {
+	create("UISizeConstraint", { MaxSize = Vector2.new(420, 300) }),
 	create("UIListLayout", {
 		SortOrder = Enum.SortOrder.LayoutOrder,
 		VerticalAlignment = Enum.VerticalAlignment.Bottom,
@@ -2422,6 +2426,7 @@ type State = {
 
 local state: State? = nil
 local openPenIndex: number? = nil
+local openSign: BasePart? = nil
 local penSignature = ""
 local animalRows: { [string]: Frame } = {}
 
@@ -2445,18 +2450,19 @@ local penTitle = label({
 local closePenButton = button("✕", RED, function()
 	penPanel.Visible = false
 	openPenIndex = nil
+	openSign = nil
 end)
 closePenButton.AnchorPoint = Vector2.new(1, 0)
 closePenButton.Position = UDim2.new(1, 0, 0, 0)
-closePenButton.Size = UDim2.fromOffset(32, 32)
+closePenButton.Size = UDim2.fromOffset(36, 36)
 closePenButton.Parent = penPanel
 
 local penBody = create("ScrollingFrame", {
 	Name = "Body",
 	BackgroundTransparency = 1,
 	BorderSizePixel = 0,
-	Position = UDim2.fromOffset(0, 40),
-	Size = UDim2.new(1, 0, 1, -40),
+	Position = UDim2.fromOffset(0, 44),
+	Size = UDim2.new(1, 0, 1, -44),
 	CanvasSize = UDim2.new(),
 	AutomaticCanvasSize = Enum.AutomaticSize.Y,
 	ScrollBarThickness = 6,
@@ -2521,7 +2527,7 @@ local function buildSpeciesCard(penIndex: number, species: Config.Species, coins
 	end)
 	buy.AnchorPoint = Vector2.new(1, 0.5)
 	buy.Position = UDim2.new(1, 0, 0.5, 0)
-	buy.Size = UDim2.new(0.36, 0, 0, 40)
+	buy.Size = UDim2.new(0.36, 0, 0, 44)
 	buy.Parent = card
 	return card
 end
@@ -2555,7 +2561,7 @@ local function buildAnimalRow(penIndex: number, animal: AnimalState): Frame
 	sell.Name = "Sell"
 	sell.AnchorPoint = Vector2.new(1, 0.5)
 	sell.Position = UDim2.new(1, 0, 0.5, 0)
-	sell.Size = UDim2.new(0.34, 0, 0, 40)
+	sell.Size = UDim2.new(0.34, 0, 0, 44)
 	sell.Parent = row
 	return row
 end
@@ -2648,7 +2654,7 @@ local function renderPen()
 			local feed = button("🥕 Feed", ORANGE, function()
 				actionEvent:FireServer("FeedPen", penIndex)
 			end)
-			feed.Size = UDim2.new(1, -8, 0, 40)
+			feed.Size = UDim2.new(1, -8, 0, 44)
 			addToBody(feed, 100)
 			footerButtons.feed = feed
 
@@ -2656,7 +2662,7 @@ local function renderPen()
 				local buyMore = button("", GREEN, function()
 					actionEvent:FireServer("BuyAnimal", penIndex, species.id)
 				end)
-				buyMore.Size = UDim2.new(1, -8, 0, 40)
+				buyMore.Size = UDim2.new(1, -8, 0, 44)
 				addToBody(buyMore, 101)
 				footerButtons.buyMore = buyMore
 			end
@@ -2739,7 +2745,7 @@ local closeBook = button("✕", RED, function()
 end)
 closeBook.AnchorPoint = Vector2.new(1, 0)
 closeBook.Position = UDim2.new(1, 0, 0, 0)
-closeBook.Size = UDim2.fromOffset(32, 32)
+closeBook.Size = UDim2.fromOffset(36, 36)
 closeBook.Parent = zooBookPanel
 
 label({
@@ -2860,9 +2866,70 @@ for _, prompt in CollectionService:GetTagged("PenPrompt") do
 	watchPrompt(prompt)
 end
 
+---------------------------------------------------------------------------
+-- Fit panels to small screens (phones)
+---------------------------------------------------------------------------
+
+-- Shrinks a panel with a UIScale so it fits the screen. widthShare and
+-- heightShare are how much of the screen it may take up.
+local function fitToScreen(panel: GuiObject, baseSize: Vector2, widthShare: number, heightShare: number)
+	local uiScale = Instance.new("UIScale")
+	uiScale.Parent = panel
+	local function update()
+		local available = screen.AbsoluteSize
+		if available.X <= 0 or available.Y <= 0 then
+			return
+		end
+		local margin = 24
+		local scale = math.min(
+			1,
+			(available.X * widthShare - margin) / baseSize.X,
+			(available.Y * heightShare - margin) / baseSize.Y
+		)
+		uiScale.Scale = math.max(0.5, scale)
+	end
+	update()
+	screen:GetPropertyChangedSignal("AbsoluteSize"):Connect(update)
+end
+
+fitToScreen(hud, Vector2.new(230, 140), 0.45, 0.35)
+fitToScreen(penPanel, Vector2.new(340, 440), 1, 1)
+fitToScreen(zooBookPanel, Vector2.new(460, 380), 1, 1)
+
+---------------------------------------------------------------------------
+-- Close the pen panel when the player walks away from its sign
+---------------------------------------------------------------------------
+
+ProximityPromptService.PromptTriggered:Connect(function(prompt)
+	if CollectionService:HasTag(prompt, "PenPrompt") and prompt.Parent and prompt.Parent:IsA("BasePart") then
+		openSign = prompt.Parent
+	end
+end)
+
+local closeCheckTimer = 0
+RunService.Heartbeat:Connect(function(dt)
+	closeCheckTimer += dt
+	if closeCheckTimer < 0.5 then
+		return
+	end
+	closeCheckTimer = 0
+	local sign = openSign
+	local character = player.Character
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	if penPanel.Visible and sign and root and root:IsA("BasePart") then
+		if (root.Position - sign.Position).Magnitude > 25 then
+			penPanel.Visible = false
+			openPenIndex = nil
+			openSign = nil
+		end
+	end
+end)
+
 -- First-time hint.
 task.delay(4, function()
-	showToast("Welcome to your zoo! Walk up to a pen sign and press E to manage it.", "info")
+	local onTouch = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
+	local how = if onTouch then "tap the button that pops up" else "press E"
+	showToast("Welcome to your zoo! Walk up to a pen sign and " .. how .. " to manage it.", "info")
 end)
 ]]></string>
           </Properties>
