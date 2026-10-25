@@ -1,5 +1,5 @@
 --!strict
--- Core zoo logic: plots, pens, animals, feeding, growth, breeding, income and actions.
+-- Core zoo logic: plots, pens, animals, food stores, growth, health, breeding, income and actions.
 --
 -- The server owns all game state. Each animal is a small "marker" instance
 -- (tagged ZooAnimal) whose attributes hold its species, stage and wander target.
@@ -13,6 +13,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Config = require(ReplicatedStorage.Shared.Config)
 local DataService = require(script.Parent.DataService)
+local ForageService = require(script.Parent.ForageService)
 local WorldBuilder = require(script.Parent.WorldBuilder)
 
 type Species = Config.Species
@@ -22,10 +23,12 @@ type Animal = {
 	species: Species,
 	growth: number,
 	hunger: number,
+	health: number,
 	stage: string,
 	marker: Configuration,
 	position: Vector3, -- where the animal is heading (or resting)
 	nextMoveAt: number,
+	warnedStarving: boolean,
 }
 
 type Pen = {
@@ -33,15 +36,19 @@ type Pen = {
 	unlocked: boolean,
 	animals: { Animal },
 	breedCooldown: number,
+	storeFood: string?,
+	storeAmount: number,
 	world: WorldBuilder.Pen,
 }
 
-type Zoo = {
+export type Zoo = {
 	player: Player,
 	plot: WorldBuilder.Plot,
 	coins: number,
 	pens: { Pen },
 	discovered: { [string]: boolean },
+	inventory: { [string]: number },
+	equipment: { [string]: number },
 	canSave: boolean,
 	loaded: boolean,
 	lastActionAt: number,
@@ -55,7 +62,6 @@ local plots: { WorldBuilder.Plot } = {}
 local plotOwners: { [number]: Player } = {}
 local zoos: { [Player]: Zoo } = {}
 
-local remotes: Folder
 local stateUpdate: RemoteEvent
 local openPen: RemoteEvent
 local notifyEvent: RemoteEvent
@@ -81,6 +87,22 @@ end
 -- State helpers
 ---------------------------------------------------------------------------
 
+local function carried(zoo: Zoo): number
+	local total = 0
+	for _, amount in zoo.inventory do
+		total += amount
+	end
+	return total
+end
+
+local function backpackCapacity(zoo: Zoo): number
+	return Config.getEquipmentValue("Backpack", zoo.equipment.Backpack or 0)
+end
+
+local function storeCapacity(zoo: Zoo): number
+	return Config.getEquipmentValue("Pantry", zoo.equipment.Pantry or 0)
+end
+
 local function computeRating(zoo: Zoo): number
 	local rating = 0
 	for _, pen in zoo.pens do
@@ -105,15 +127,23 @@ local function serialize(zoo: Zoo): DataService.SaveData
 				species = animal.species.id,
 				growth = math.floor(animal.growth * 10) / 10,
 				hunger = math.floor(animal.hunger * 10) / 10,
+				health = math.ceil(animal.health * 10) / 10,
 			})
 		end
-		table.insert(pens, { unlocked = pen.unlocked, animals = animals })
+		table.insert(pens, {
+			unlocked = pen.unlocked,
+			animals = animals,
+			storeFood = pen.storeFood,
+			storeAmount = math.floor(pen.storeAmount * 10) / 10,
+		})
 	end
 	return {
-		version = 1,
+		version = 2,
 		coins = math.floor(zoo.coins),
 		pens = pens,
 		discovered = table.clone(zoo.discovered),
+		inventory = table.clone(zoo.inventory),
+		equipment = table.clone(zoo.equipment),
 	}
 end
 
@@ -123,6 +153,7 @@ local function penSpecies(pen: Pen): Species?
 end
 
 local function buildClientState(zoo: Zoo)
+	local capacity = storeCapacity(zoo)
 	local pens = {}
 	for _, pen in zoo.pens do
 		local animals = {}
@@ -133,6 +164,7 @@ local function buildClientState(zoo: Zoo)
 				stage = animal.stage,
 				growth = math.clamp(animal.growth / animal.species.growTime, 0, 1),
 				hunger = animal.hunger / Config.HungerMax,
+				health = animal.health / Config.HealthMax,
 				sellPrice = Config.getSellPrice(animal.species, animal.growth),
 			})
 		end
@@ -142,12 +174,19 @@ local function buildClientState(zoo: Zoo)
 			price = Config.getPenPrice(pen.index),
 			species = if species then species.id else nil,
 			animals = animals,
+			storeFood = pen.storeFood,
+			storeAmount = math.floor(pen.storeAmount),
+			storeCapacity = capacity,
 		})
 	end
 	return {
 		coins = math.floor(zoo.coins),
 		rating = computeRating(zoo),
 		discovered = zoo.discovered,
+		inventory = zoo.inventory,
+		carried = carried(zoo),
+		capacity = backpackCapacity(zoo),
+		equipment = zoo.equipment,
 		pens = pens,
 	}
 end
@@ -156,9 +195,8 @@ local function pushState(zoo: Zoo)
 	if not zoo.loaded then
 		return
 	end
-	local rating = computeRating(zoo)
 	zoo.coinsValue.Value = math.floor(zoo.coins)
-	zoo.ratingValue.Value = rating
+	zoo.ratingValue.Value = computeRating(zoo)
 	stateUpdate:FireClient(zoo.player, buildClientState(zoo))
 end
 
@@ -173,7 +211,28 @@ local function resetPenVisual(worldPen: WorldBuilder.Pen)
 	worldPen.statusLabel.Text = ""
 end
 
-local function refreshPenVisual(pen: Pen)
+local function setTroughFill(pen: Pen, fraction: number)
+	local fill = pen.world.troughFill
+	if fraction <= 0 then
+		fill.Transparency = 1
+		return
+	end
+	fill.Transparency = 0
+	-- Grow the fill upward from the bottom of the trough.
+	local height = 0.1 + 0.7 * math.clamp(fraction, 0, 1)
+	local trough = pen.world.trough
+	fill.Size = Vector3.new(fill.Size.X, height, fill.Size.Z)
+	fill.CFrame = trough.CFrame * CFrame.new(0, -trough.Size.Y / 2 + 0.1 + height / 2, 0)
+	local food = if pen.storeFood then pen.storeFood else ""
+	fill.Color = if food == "Fish"
+		then Color3.fromRGB(120, 170, 210)
+		elseif food == "Meat" then Color3.fromRGB(190, 80, 80)
+		elseif food == "Melon" then Color3.fromRGB(90, 160, 70)
+		elseif food == "Carrot" then Color3.fromRGB(240, 140, 40)
+		else Color3.fromRGB(200, 180, 60)
+end
+
+local function refreshPenVisual(zoo: Zoo, pen: Pen)
 	local world = pen.world
 	if not pen.unlocked then
 		world.floor.Color = LOCKED_FLOOR
@@ -183,11 +242,13 @@ local function refreshPenVisual(pen: Pen)
 		return
 	end
 
+	local capacity = storeCapacity(zoo)
+	setTroughFill(pen, pen.storeAmount / capacity)
+
 	local species = penSpecies(pen)
 	if not species then
 		world.floor.Color = EMPTY_FLOOR
 		world.floor.Material = Enum.Material.Grass
-		world.troughFill.Transparency = 1
 		world.statusLabel.Text = "Empty pen — buy an animal!"
 		return
 	end
@@ -195,19 +256,28 @@ local function refreshPenVisual(pen: Pen)
 	world.floor.Color = species.habitat
 	world.floor.Material = species.habitatMaterial
 
-	local hungry = 0
-	local totalHunger = 0
+	local starving, hungry = 0, 0
 	for _, animal in pen.animals do
-		totalHunger += animal.hunger
 		if animal.hunger <= 0 then
+			starving += 1
+		elseif animal.hunger <= Config.EatThreshold then
 			hungry += 1
 		end
 	end
-	world.troughFill.Transparency = if totalHunger > 0 then 0 else 1
 
-	local text = string.format("%s ×%d", species.name, #pen.animals)
-	if hungry > 0 then
-		text ..= "  🍖 Hungry!"
+	local food = Config.FoodById[species.food]
+	local text = string.format(
+		"%s ×%d  %s %d/%d",
+		species.name,
+		#pen.animals,
+		food.emoji,
+		math.floor(pen.storeAmount),
+		capacity
+	)
+	if starving > 0 then
+		text ..= "  ⚠️ Starving!"
+	elseif hungry > 0 and pen.storeAmount < 1 then
+		text ..= "  🍽️ Needs food"
 	end
 	world.statusLabel.Text = text
 end
@@ -236,9 +306,18 @@ local function updateMarker(animal: Animal)
 	local marker = animal.marker
 	marker:SetAttribute("Stage", animal.stage)
 	marker:SetAttribute("Hungry", animal.hunger <= 0)
+	-- Rounded so the attribute only replicates when it visibly changes.
+	marker:SetAttribute("Health", math.ceil(animal.health / Config.HealthMax * 20) / 20)
 end
 
-local function spawnAnimal(pen: Pen, speciesId: string, growth: number, hunger: number, near: Vector3?): Animal
+local function spawnAnimal(
+	pen: Pen,
+	speciesId: string,
+	growth: number,
+	hunger: number,
+	health: number,
+	near: Vector3?
+): Animal
 	local species = Config.SpeciesById[speciesId]
 	local position = near or randomPointInPen(pen, species)
 
@@ -249,10 +328,12 @@ local function spawnAnimal(pen: Pen, speciesId: string, growth: number, hunger: 
 		species = species,
 		growth = growth,
 		hunger = hunger,
+		health = health,
 		stage = Config.getStage(species, growth),
 		marker = marker,
 		position = position,
 		nextMoveAt = os.clock() + math.random() * 3,
+		warnedStarving = false,
 	}
 	marker:SetAttribute("Species", species.id)
 	marker:SetAttribute("Target", position)
@@ -312,37 +393,85 @@ local function discover(zoo: Zoo, species: Species)
 	end
 end
 
+-- Animals eat from the pen's food store when they get hungry.
+local function eat(pen: Pen, animal: Animal)
+	if animal.hunger > Config.EatThreshold or pen.storeAmount <= 0 then
+		return
+	end
+	if pen.storeFood ~= animal.species.food then
+		return
+	end
+	local meal = animal.species.mealSize
+	local eaten = math.min(meal, pen.storeAmount)
+	pen.storeAmount -= eaten
+	if pen.storeAmount < 0.001 then
+		pen.storeAmount = 0
+	end
+	animal.hunger = math.min(Config.HungerMax, animal.hunger + Config.HungerMax * eaten / meal)
+end
+
 local function tickZoo(zoo: Zoo, dt: number, now: number)
 	local income = 0
 	for _, pen in zoo.pens do
 		local adults = 0
 		local totalHunger = 0
+		local dead: { Animal } = {}
+
 		for _, animal in pen.animals do
 			local species = animal.species
+			local wasHungry = animal.hunger <= 0
+			local oldHealthKey = math.ceil(animal.health / Config.HealthMax * 20)
+
+			animal.hunger = math.max(0, animal.hunger - Config.HungerDrainPerSecond * dt)
+			eat(pen, animal)
+
 			if animal.hunger > 0 then
+				-- Fed: grow, earn and heal.
 				if animal.growth < species.growTime then
 					local rate = if animal.hunger >= Config.WellFedThreshold then 1 else 0.5
 					animal.growth = math.min(species.growTime, animal.growth + dt * rate)
 				else
 					income += species.income * dt
 				end
+				animal.health = math.min(Config.HealthMax, animal.health + Config.HealthRegenPerSecond * dt)
+				if animal.health >= Config.HealthMax * 0.75 then
+					animal.warnedStarving = false
+				end
+			else
+				-- Starving: lose health.
+				animal.health = math.max(0, animal.health - Config.StarveDamagePerSecond * dt)
+				if not animal.warnedStarving and animal.health <= Config.HealthMax * 0.5 then
+					animal.warnedStarving = true
+					notify(
+						zoo.player,
+						string.format("⚠️ Your %s in pen %d is starving! Bring it food fast!", species.name, pen.index),
+						"error"
+					)
+				end
 			end
 
-			local wasHungry = animal.hunger <= 0
-			animal.hunger = math.max(0, animal.hunger - Config.HungerDrainPerSecond * dt)
+			if animal.health <= 0 then
+				table.insert(dead, animal)
+				continue
+			end
 			totalHunger += animal.hunger
 
+			local isHungry = animal.hunger <= 0
 			local stage = Config.getStage(species, animal.growth)
-			if stage ~= animal.stage then
+			local healthKey = math.ceil(animal.health / Config.HealthMax * 20)
+			if stage ~= animal.stage or wasHungry ~= isHungry or healthKey ~= oldHealthKey then
+				local grewUp = stage ~= animal.stage and stage == "Adult"
 				animal.stage = stage
 				updateMarker(animal)
-				if stage == "Adult" then
+				if grewUp then
 					discover(zoo, species)
 				end
-			elseif wasHungry ~= (animal.hunger <= 0) then
-				updateMarker(animal)
-				if animal.hunger <= 0 then
-					notify(zoo.player, string.format("🍖 Your %s in pen %d is hungry!", species.name, pen.index), "warning")
+				if isHungry and not wasHungry then
+					notify(
+						zoo.player,
+						string.format("🍽️ Your %s in pen %d is out of food!", species.name, pen.index),
+						"warning"
+					)
 				end
 			end
 
@@ -350,6 +479,15 @@ local function tickZoo(zoo: Zoo, dt: number, now: number)
 				adults += 1
 			end
 			wander(pen, animal, now)
+		end
+
+		for _, animal in dead do
+			removeAnimal(pen, animal)
+			notify(
+				zoo.player,
+				string.format("💀 Your %s in pen %d starved to death.", animal.species.name, pen.index),
+				"error"
+			)
 		end
 
 		-- Breeding: two well-fed adults and a free spot can produce a baby.
@@ -365,11 +503,11 @@ local function tickZoo(zoo: Zoo, dt: number, now: number)
 		then
 			pen.breedCooldown = Config.BreedCooldown
 			local parent = pen.animals[math.random(1, #pen.animals)]
-			spawnAnimal(pen, species.id, 0, Config.HungerMax, parent.position)
+			spawnAnimal(pen, species.id, 0, Config.HungerMax, Config.HealthMax, parent.position)
 			notify(zoo.player, string.format("🍼 A baby %s was born in pen %d!", species.name, pen.index), "success")
 		end
 
-		refreshPenVisual(pen)
+		refreshPenVisual(zoo, pen)
 	end
 	zoo.coins += income
 end
@@ -394,25 +532,13 @@ local function spend(zoo: Zoo, amount: number): boolean
 	return true
 end
 
-local function feedCost(pen: Pen): number
-	local cost = 0
-	for _, animal in pen.animals do
-		if animal.hunger < Config.HungerMax - 1 then
-			cost += animal.species.feedCost
-		end
+local function isNearPen(zoo: Zoo, pen: Pen): boolean
+	local character = zoo.player.Character
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	if not root or not root:IsA("BasePart") then
+		return false
 	end
-	return cost
-end
-
-local function feedPen(pen: Pen)
-	for _, animal in pen.animals do
-		local wasHungry = animal.hunger <= 0
-		animal.hunger = Config.HungerMax
-		if wasHungry then
-			updateMarker(animal)
-		end
-	end
-	refreshPenVisual(pen)
+	return (root.Position - pen.world.sign.Position).Magnitude <= Config.StockDistance
 end
 
 local actions: { [string]: (zoo: Zoo, ...any) -> () } = {}
@@ -424,14 +550,14 @@ function actions.UnlockPen(zoo: Zoo, penIndex: any)
 	end
 	if spend(zoo, Config.getPenPrice(pen.index)) then
 		pen.unlocked = true
-		refreshPenVisual(pen)
+		refreshPenVisual(zoo, pen)
 		notify(zoo.player, string.format("🔓 Pen %d unlocked!", pen.index), "success")
 	end
 end
 
 function actions.BuyAnimal(zoo: Zoo, penIndex: any, speciesId: any)
 	local pen = getPen(zoo, penIndex)
-	local species = type(speciesId) == "string" and Config.SpeciesById[speciesId] or nil
+	local species = if type(speciesId) == "string" then Config.SpeciesById[speciesId] else nil
 	if not pen or not species or not pen.unlocked then
 		return
 	end
@@ -445,50 +571,69 @@ function actions.BuyAnimal(zoo: Zoo, penIndex: any, speciesId: any)
 		return
 	end
 	if spend(zoo, species.price) then
-		spawnAnimal(pen, species.id, 0, Config.HungerMax)
-		refreshPenVisual(pen)
-		notify(zoo.player, string.format("🐾 A baby %s joined pen %d!", species.name, pen.index), "success")
-	end
-end
-
-function actions.FeedPen(zoo: Zoo, penIndex: any)
-	local pen = getPen(zoo, penIndex)
-	if not pen or #pen.animals == 0 then
-		return
-	end
-	local cost = feedCost(pen)
-	if cost == 0 then
-		notify(zoo.player, "They're already full!", "info")
-		return
-	end
-	if spend(zoo, cost) then
-		feedPen(pen)
-		notify(zoo.player, string.format("🥕 Fed pen %d for %s coins.", pen.index, formatNumber(cost)), "success")
-	end
-end
-
-function actions.FeedAll(zoo: Zoo)
-	local fed, spent, skipped = 0, 0, 0
-	for _, pen in zoo.pens do
-		local cost = feedCost(pen)
-		if cost > 0 then
-			if zoo.coins >= cost then
-				zoo.coins -= cost
-				spent += cost
-				fed += 1
-				feedPen(pen)
-			else
-				skipped += 1
+		if pen.storeFood ~= species.food then
+			if pen.storeFood and pen.storeAmount >= 1 then
+				local old = Config.FoodById[pen.storeFood]
+				notify(zoo.player, string.format("The old %s in this pen's store went to waste.", old.name), "warning")
 			end
+			pen.storeFood = species.food
+			pen.storeAmount = 0
 		end
+		spawnAnimal(pen, species.id, 0, Config.HungerMax, Config.HealthMax)
+		refreshPenVisual(zoo, pen)
+		local food = Config.FoodById[species.food]
+		notify(
+			zoo.player,
+			string.format("🐾 A baby %s joined pen %d! It eats %s %s.", species.name, pen.index, food.emoji, food.name),
+			"success"
+		)
 	end
-	if fed == 0 and skipped == 0 then
-		notify(zoo.player, "Everyone is already full!", "info")
-	elseif skipped > 0 then
-		notify(zoo.player, string.format("Fed %d pens. Not enough coins for %d more.", fed, skipped), "warning")
+end
+
+function actions.StockPen(zoo: Zoo, penIndex: any)
+	local pen = getPen(zoo, penIndex)
+	if not pen or not pen.unlocked then
+		return
+	end
+	local species = penSpecies(pen)
+	if not species then
+		notify(zoo.player, "Buy an animal first so you know what food to store.", "info")
+		return
+	end
+	if not isNearPen(zoo, pen) then
+		notify(zoo.player, "Walk up to the pen's sign to fill its food store.", "error")
+		return
+	end
+	local food = Config.FoodById[species.food]
+	local have = zoo.inventory[food.id] or 0
+	if have <= 0 then
+		notify(
+			zoo.player,
+			string.format(
+				"You have no %s %s. Forage it in the %s!",
+				food.emoji,
+				food.name,
+				Config.Rings[food.ring].name
+			),
+			"error"
+		)
+		return
+	end
+	pen.storeFood = food.id
+	local space = math.floor(storeCapacity(zoo) - pen.storeAmount)
+	if space <= 0 then
+		notify(zoo.player, "This pen's food store is full!", "info")
+		return
+	end
+	local amount = math.min(have, space)
+	pen.storeAmount += amount
+	if have - amount > 0 then
+		zoo.inventory[food.id] = have - amount
 	else
-		notify(zoo.player, string.format("🥕 Fed %d pens for %s coins.", fed, formatNumber(spent)), "success")
+		zoo.inventory[food.id] = nil
 	end
+	refreshPenVisual(zoo, pen)
+	notify(zoo.player, string.format("Stored %d %s %s in pen %d.", amount, food.emoji, food.name, pen.index), "success")
 end
 
 function actions.SellAnimal(zoo: Zoo, penIndex: any, animalId: any)
@@ -501,7 +646,7 @@ function actions.SellAnimal(zoo: Zoo, penIndex: any, animalId: any)
 			local price = Config.getSellPrice(animal.species, animal.growth)
 			zoo.coins += price
 			removeAnimal(pen, animal)
-			refreshPenVisual(pen)
+			refreshPenVisual(zoo, pen)
 			notify(
 				zoo.player,
 				string.format("💰 Sold a %s for %s coins.", animal.species.name, formatNumber(price)),
@@ -509,6 +654,17 @@ function actions.SellAnimal(zoo: Zoo, penIndex: any, animalId: any)
 			)
 			return
 		end
+	end
+end
+
+function actions.DropFood(zoo: Zoo, foodId: any)
+	if type(foodId) ~= "string" or not zoo.inventory[foodId] then
+		return
+	end
+	zoo.inventory[foodId] = nil
+	local food = Config.FoodById[foodId]
+	if food then
+		notify(zoo.player, string.format("Dropped your %s %s.", food.emoji, food.name), "info")
 	end
 end
 
@@ -574,6 +730,8 @@ local function onPlayerAdded(player: Player)
 			unlocked = false,
 			animals = {},
 			breedCooldown = 0,
+			storeFood = nil,
+			storeAmount = 0,
 			world = worldPen,
 		})
 		worldPen.prompt:SetAttribute("OwnerUserId", player.UserId)
@@ -585,6 +743,8 @@ local function onPlayerAdded(player: Player)
 		coins = 0,
 		pens = pens,
 		discovered = {},
+		inventory = {},
+		equipment = {},
 		canSave = false,
 		loaded = false,
 		lastActionAt = 0,
@@ -608,15 +768,25 @@ local function onPlayerAdded(player: Player)
 
 	zoo.coins = data.coins
 	zoo.discovered = data.discovered
+	zoo.inventory = data.inventory
+	zoo.equipment = data.equipment
 	zoo.canSave = canSave
 	for i, savedPen in data.pens do
 		local pen = pens[i]
 		if pen then
 			pen.unlocked = savedPen.unlocked
+			pen.storeFood = savedPen.storeFood
+			pen.storeAmount = savedPen.storeAmount
 			for _, saved in savedPen.animals do
-				spawnAnimal(pen, saved.species, saved.growth, saved.hunger)
+				spawnAnimal(pen, saved.species, saved.growth, saved.hunger, saved.health)
 			end
-			refreshPenVisual(pen)
+			-- Older saves have no store yet: match it to the animals.
+			local species = penSpecies(pen)
+			if species and pen.storeFood ~= species.food then
+				pen.storeFood = species.food
+				pen.storeAmount = 0
+			end
+			refreshPenVisual(zoo, pen)
 		end
 	end
 	zoo.loaded = true
@@ -648,7 +818,7 @@ end
 ---------------------------------------------------------------------------
 
 local function createRemotes()
-	remotes = Instance.new("Folder")
+	local remotes = Instance.new("Folder")
 	remotes.Name = "Remotes"
 	local function remote(name: string): RemoteEvent
 		local event = Instance.new("RemoteEvent")
@@ -685,6 +855,28 @@ function ZooService.start()
 			end)
 		end
 	end
+
+	-- Foraging and chests live in their own module and talk to zoos through this.
+	ForageService.start({
+		getZoo = function(player: Player): any
+			local zoo = zoos[player]
+			return if zoo and zoo.loaded then zoo else nil
+		end,
+		carried = function(zoo: any): number
+			return carried(zoo)
+		end,
+		capacity = function(zoo: any): number
+			return backpackCapacity(zoo)
+		end,
+		changed = function(zoo: any)
+			-- Pantry upgrades change every pen's store size.
+			for _, pen in (zoo :: Zoo).pens do
+				refreshPenVisual(zoo, pen)
+			end
+			pushState(zoo)
+		end,
+		notify = notify,
+	})
 
 	actionEvent.OnServerEvent:Connect(function(player, actionName, ...)
 		local zoo = zoos[player]

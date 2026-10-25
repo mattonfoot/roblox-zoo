@@ -69,12 +69,75 @@ function WorldBuilder.buildEnvironment(): Folder
 
 	makePart({
 		Name = "Ground",
-		Size = Vector3.new(600, 2, 600),
+		Size = Vector3.new(1600, 2, 1600),
 		CFrame = CFrame.new(0, -1, 0),
 		Color = Color3.fromRGB(95, 155, 70),
 		Material = Enum.Material.Grass,
 		Parent = folder,
 	})
+
+	-- Wild rings around the zoo, drawn as flat discs from the outside in.
+	-- Rarer food grows in the outer rings.
+	for ringIndex = #Config.Rings, 1, -1 do
+		local ring = Config.Rings[ringIndex]
+		makePart({
+			Name = ring.name,
+			Shape = Enum.PartType.Cylinder,
+			Size = Vector3.new(0.2, ring.outer * 2, ring.outer * 2),
+			CFrame = CFrame.new(0, -0.1 + 0.02 * (#Config.Rings - ringIndex + 1), 0) * CFrame.Angles(0, 0, math.rad(90)),
+			Color = ring.color,
+			Material = ring.material,
+			Parent = folder,
+		})
+	end
+	makePart({
+		Name = "ZooGrounds",
+		Shape = Enum.PartType.Cylinder,
+		Size = Vector3.new(0.2, Config.Rings[1].inner * 2, Config.Rings[1].inner * 2),
+		CFrame = CFrame.new(0, 0, 0) * CFrame.Angles(0, 0, math.rad(90)),
+		Color = Color3.fromRGB(95, 155, 70),
+		Material = Enum.Material.Grass,
+		Parent = folder,
+	})
+
+	-- Signs at the edge of each ring saying what food grows there.
+	for ringIndex, ring in Config.Rings do
+		local foods = {}
+		for _, food in Config.Foods do
+			if food.ring == ringIndex then
+				table.insert(foods, food.emoji .. " " .. food.name)
+			end
+		end
+		local text = ring.name .. "\n" .. table.concat(foods, "  ")
+		for i = 0, 3 do
+			local angle = i * math.pi / 2 + math.pi / 4
+			local position = Vector3.new(math.cos(angle), 0, math.sin(angle)) * (ring.inner + 4)
+			local facing = CFrame.lookAt(position, Vector3.new(0, 0, 0))
+			makePart({
+				Name = "RingSignPost",
+				Size = Vector3.new(0.6, 6, 0.6),
+				CFrame = facing * CFrame.new(0, 3, 0),
+				Color = WOOD,
+				Material = Enum.Material.Wood,
+				Parent = folder,
+			})
+			local board = makePart({
+				Name = "RingSign",
+				Size = Vector3.new(9, 3.5, 0.4),
+				CFrame = facing * CFrame.new(0, 6.5, 0),
+				Color = Color3.fromRGB(240, 225, 190),
+				Material = Enum.Material.WoodPlanks,
+				Parent = folder,
+			})
+			for _, face in { Enum.NormalId.Front, Enum.NormalId.Back } do
+				local gui = Instance.new("SurfaceGui")
+				gui.Face = face
+				gui.PixelsPerStud = 30
+				gui.Parent = board
+				makeLabel(gui, text, Color3.fromRGB(90, 55, 25))
+			end
+		end
+	end
 
 	makePart({
 		Name = "Road",

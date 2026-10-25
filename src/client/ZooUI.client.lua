@@ -164,7 +164,7 @@ local hud = create("Frame", {
 	Name = "HUD",
 	BackgroundColor3 = PANEL,
 	Position = UDim2.fromOffset(12, 12),
-	Size = UDim2.fromOffset(230, 140),
+	Size = UDim2.fromOffset(230, 184),
 	Parent = screen,
 }, { corner(12), padding(8) })
 
@@ -182,25 +182,48 @@ local ratingLabel = label({
 	Parent = hud,
 })
 
+local backpackLabel = label({
+	Text = "🎒 0/15",
+	Position = UDim2.fromOffset(0, 54),
+	Size = UDim2.new(1, 0, 0, 22),
+	MaxTextSize = 20,
+	Parent = hud,
+})
+local carryingLabel = label({
+	Text = "Empty — go forage!",
+	Position = UDim2.fromOffset(0, 78),
+	Size = UDim2.new(1, 0, 0, 20),
+	MaxTextSize = 16,
+	TextColor3 = Color3.fromRGB(110, 90, 70),
+	Parent = hud,
+})
+
 local zooBookPanel: Frame
 local renderZooBook: () -> ()
+local gearPanel: Frame
+local renderGear: (force: boolean) -> ()
 
 local bookButton = button("📖 Zoo Book", BLUE, function()
 	zooBookPanel.Visible = not zooBookPanel.Visible
 	if zooBookPanel.Visible then
+		gearPanel.Visible = false
 		renderZooBook()
 	end
 end)
-bookButton.Position = UDim2.fromOffset(0, 58)
+bookButton.Position = UDim2.fromOffset(0, 102)
 bookButton.Size = UDim2.new(1, 0, 0, 30)
 bookButton.Parent = hud
 
-local feedAllButton = button("🥕 Feed all pens", ORANGE, function()
-	actionEvent:FireServer("FeedAll")
+local gearButton = button("🧰 Gear & Foraging", ORANGE, function()
+	gearPanel.Visible = not gearPanel.Visible
+	if gearPanel.Visible then
+		zooBookPanel.Visible = false
+		renderGear(true)
+	end
 end)
-feedAllButton.Position = UDim2.fromOffset(0, 92)
-feedAllButton.Size = UDim2.new(1, 0, 0, 30)
-feedAllButton.Parent = hud
+gearButton.Position = UDim2.fromOffset(0, 136)
+gearButton.Size = UDim2.new(1, 0, 0, 30)
+gearButton.Parent = hud
 
 ---------------------------------------------------------------------------
 -- Notifications
@@ -279,6 +302,7 @@ type AnimalState = {
 	stage: string,
 	growth: number,
 	hunger: number,
+	health: number,
 	sellPrice: number,
 }
 type PenState = {
@@ -286,11 +310,18 @@ type PenState = {
 	price: number,
 	species: string?,
 	animals: { AnimalState },
+	storeFood: string?,
+	storeAmount: number,
+	storeCapacity: number,
 }
 type State = {
 	coins: number,
 	rating: number,
 	discovered: { [string]: boolean },
+	inventory: { [string]: number },
+	carried: number,
+	capacity: number,
+	equipment: { [string]: number },
 	pens: { PenState },
 }
 
@@ -359,16 +390,6 @@ local function addToBody(instance: GuiObject, order: number)
 	instance.Parent = penBody
 end
 
-local function penFeedCost(pen: PenState): number
-	local cost = 0
-	for _, animal in pen.animals do
-		if animal.hunger < 0.99 then
-			cost += Config.SpeciesById[animal.species].feedCost
-		end
-	end
-	return cost
-end
-
 local function buildSpeciesCard(penIndex: number, species: Config.Species, coins: number): Frame
 	local affordable = coins >= species.price
 	local card = create("Frame", {
@@ -382,7 +403,8 @@ local function buildSpeciesCard(penIndex: number, species: Config.Species, coins
 	})
 	label({
 		Text = string.format(
-			"Adult earns %s/s • grows in %ds",
+			"Eats %s • earns %s/s • grows %ds",
+			Config.FoodById[species.food].emoji,
 			formatNumber(species.income),
 			species.growTime
 		),
@@ -406,7 +428,7 @@ local function buildAnimalRow(penIndex: number, animal: AnimalState): Frame
 	local species = Config.SpeciesById[animal.species]
 	local row = create("Frame", {
 		BackgroundColor3 = PANEL_DARK,
-		Size = UDim2.new(1, -8, 0, 78),
+		Size = UDim2.new(1, -8, 0, 100),
 	}, { corner(10), padding(6) })
 	label({
 		Name = "Title",
@@ -424,6 +446,11 @@ local function buildAnimalRow(penIndex: number, animal: AnimalState): Frame
 	hungerBar.Position = UDim2.fromOffset(0, 48)
 	hungerBar.Size = UDim2.new(0.62, 0, 0, 18)
 	hungerBar.Parent = row
+	local healthBar = bar(1, RED, "")
+	healthBar.Name = "Health"
+	healthBar.Position = UDim2.fromOffset(0, 70)
+	healthBar.Size = UDim2.new(0.62, 0, 0, 18)
+	healthBar.Parent = row
 
 	local sell = button("Sell", RED, function()
 		actionEvent:FireServer("SellAnimal", penIndex, animal.id)
@@ -441,8 +468,15 @@ local function updateAnimalRow(row: Frame, animal: AnimalState)
 		then "Fully grown!"
 		else string.format("Growing %d%%", math.floor(animal.growth * 100))
 	setBar(row:FindFirstChild("Growth") :: Frame, animal.growth, growthText)
-	local hungerText = if animal.hunger <= 0 then "Hungry!" else string.format("Food %d%%", math.ceil(animal.hunger * 100))
+	local hungerText = if animal.hunger <= 0
+		then "Starving!"
+		else string.format("Full %d%%", math.ceil(animal.hunger * 100))
 	setBar(row:FindFirstChild("Hunger") :: Frame, animal.hunger, hungerText)
+	setBar(
+		row:FindFirstChild("Health") :: Frame,
+		animal.health,
+		string.format("Health %d%%", math.ceil(animal.health * 100))
+	)
 	local sell = row:FindFirstChild("Sell") :: TextButton
 	sell.Text = "Sell 🪙" .. formatNumber(animal.sellPrice)
 	local title = row:FindFirstChild("Title") :: TextLabel
@@ -504,7 +538,7 @@ local function renderPen()
 		elseif #pen.animals == 0 then
 			addToBody(
 				label({
-					Text = "Pick a baby animal to raise. Feed it so it grows into an adult that earns coins from visitors!",
+					Text = "Pick a baby animal to raise. Keep its food store stocked so it grows into an adult that earns coins!",
 					Size = UDim2.new(1, -8, 0, 54),
 					TextWrapped = true,
 					MaxTextSize = 15,
@@ -521,12 +555,17 @@ local function renderPen()
 				addToBody(row, i)
 			end
 
-			local feed = button("🥕 Feed", ORANGE, function()
-				actionEvent:FireServer("FeedPen", penIndex)
+			local storeBar = bar(0, ORANGE, "")
+			storeBar.Name = "Store"
+			storeBar.Size = UDim2.new(1, -8, 0, 24)
+			addToBody(storeBar, 99)
+
+			local stock = button("", ORANGE, function()
+				actionEvent:FireServer("StockPen", penIndex)
 			end)
-			feed.Size = UDim2.new(1, -8, 0, 44)
-			addToBody(feed, 100)
-			footerButtons.feed = feed
+			stock.Size = UDim2.new(1, -8, 0, 44)
+			addToBody(stock, 100)
+			footerButtons.stock = stock
 
 			if species and #pen.animals < Config.PenCapacity then
 				local buyMore = button("", GREEN, function()
@@ -558,9 +597,21 @@ local function renderPen()
 			updateAnimalRow(row, animal)
 		end
 	end
-	if footerButtons.feed then
-		local cost = penFeedCost(pen)
-		footerButtons.feed.Text = if cost > 0 then "🥕 Feed for 🪙 " .. formatNumber(cost) else "🥕 Everyone is full"
+	local food = if species then Config.FoodById[species.food] else nil
+	local storeBar = penBody:FindFirstChild("Store")
+	if storeBar and food then
+		setBar(
+			storeBar,
+			pen.storeAmount / math.max(1, pen.storeCapacity),
+			string.format("%s %s store: %d / %d", food.emoji, food.name, pen.storeAmount, pen.storeCapacity)
+		)
+	end
+	if footerButtons.stock and food then
+		local have = currentState.inventory[food.id] or 0
+		footerButtons.stock.Text = if have > 0
+			then string.format("Fill store from backpack (%s %d)", food.emoji, have)
+			else string.format("No %s %s — forage in the %s", food.emoji, food.name, Config.Rings[food.ring].name)
+		footerButtons.stock.BackgroundColor3 = if have > 0 then ORANGE else GREY
 	end
 	if footerButtons.buyMore and species then
 		footerButtons.buyMore.Text = string.format("Buy another %s 🪙 %s", species.name, formatNumber(species.price))
@@ -573,12 +624,20 @@ local function renderPen()
 				adults += 1
 			end
 		end
-		if #pen.animals >= Config.PenCapacity then
+		local starving = false
+		for _, animal in pen.animals do
+			if animal.hunger <= 0 then
+				starving = true
+			end
+		end
+		if starving then
+			tip.Text = "⚠️ Starving animals lose health and die at 0. Fill the food store!"
+		elseif #pen.animals >= Config.PenCapacity then
 			tip.Text = "This pen is full. Sell an animal to make room."
 		elseif adults >= 2 then
 			tip.Text = "💕 Two well-fed adults may have a baby soon!"
 		else
-			tip.Text = "Tip: two well-fed adults in a pen can have babies."
+			tip.Text = "Animals eat from the store by themselves. Two well-fed adults can have babies."
 		end
 	end
 end
@@ -691,6 +750,221 @@ renderZooBook = function()
 end
 
 ---------------------------------------------------------------------------
+-- Gear & Foraging
+---------------------------------------------------------------------------
+
+gearPanel = create("Frame", {
+	Name = "Gear",
+	BackgroundColor3 = PANEL,
+	AnchorPoint = Vector2.new(0.5, 0.5),
+	Position = UDim2.fromScale(0.5, 0.5),
+	Size = UDim2.fromOffset(460, 420),
+	Visible = false,
+	Parent = screen,
+}, { corner(14), padding(12) })
+
+label({
+	Text = "🧰 Gear & Foraging",
+	Size = UDim2.new(1, -40, 0, 32),
+	MaxTextSize = 26,
+	Parent = gearPanel,
+})
+local closeGear = button("✕", RED, function()
+	gearPanel.Visible = false
+end)
+closeGear.AnchorPoint = Vector2.new(1, 0)
+closeGear.Position = UDim2.new(1, 0, 0, 0)
+closeGear.Size = UDim2.fromOffset(36, 36)
+closeGear.Parent = gearPanel
+
+local gearBody = create("ScrollingFrame", {
+	BackgroundTransparency = 1,
+	BorderSizePixel = 0,
+	Position = UDim2.fromOffset(0, 44),
+	Size = UDim2.new(1, 0, 1, -44),
+	CanvasSize = UDim2.new(),
+	AutomaticCanvasSize = Enum.AutomaticSize.Y,
+	ScrollBarThickness = 6,
+	ScrollBarImageColor3 = GREY,
+	Parent = gearPanel,
+}, {
+	create("UIListLayout", {
+		SortOrder = Enum.SortOrder.LayoutOrder,
+		Padding = UDim.new(0, 6),
+	}),
+})
+
+local gearSignature = ""
+
+local function equipmentEffect(item: Config.Equipment, level: number): string
+	local value = Config.getEquipmentValue(item.id, level)
+	if item.id == "Gloves" then
+		return string.format("Foraging takes %d%% of the time", math.floor(value * 100 + 0.5))
+	elseif item.id == "Backpack" then
+		return string.format("Carry up to %d food", value)
+	end
+	return string.format("Each pen stores up to %d food", value)
+end
+
+renderGear = function(force: boolean)
+	if not gearPanel.Visible then
+		return
+	end
+	local current = state
+	local equipment = if current then current.equipment else {}
+	local inventory = if current then current.inventory else {}
+
+	local parts = {}
+	for _, item in Config.Equipment do
+		table.insert(parts, tostring(equipment[item.id] or 0))
+	end
+	for _, food in Config.Foods do
+		table.insert(parts, tostring(inventory[food.id] or 0))
+	end
+	local signature = table.concat(parts, "|")
+	if not force and signature == gearSignature then
+		return
+	end
+	gearSignature = signature
+
+	for _, child in gearBody:GetChildren() do
+		if not child:IsA("UIListLayout") then
+			child:Destroy()
+		end
+	end
+	local order = 0
+	local function add(instance: GuiObject)
+		order += 1
+		instance.LayoutOrder = order
+		instance.Parent = gearBody
+	end
+	local function heading(text: string)
+		add(label({ Text = text, Size = UDim2.new(1, -8, 0, 26), MaxTextSize = 20 }))
+	end
+	local function note(text: string)
+		add(label({
+			Text = text,
+			Size = UDim2.new(1, -8, 0, 34),
+			TextWrapped = true,
+			MaxTextSize = 14,
+			TextColor3 = Color3.fromRGB(110, 90, 70),
+		}))
+	end
+
+	heading("Equipment")
+	for _, item in Config.Equipment do
+		local level = equipment[item.id] or 0
+		add(create("Frame", {
+			BackgroundColor3 = PANEL_DARK,
+			Size = UDim2.new(1, -8, 0, 52),
+		}, {
+			corner(10),
+			padding(6),
+			label({
+				Text = string.format("%s %s  (%d/%d)", item.emoji, item.tierNames[level + 1], level, Config.MaxEquipmentLevel),
+				Size = UDim2.new(1, 0, 0, 20),
+				MaxTextSize = 18,
+			}),
+			label({
+				Text = equipmentEffect(item, level),
+				Position = UDim2.fromOffset(0, 22),
+				Size = UDim2.new(1, 0, 0, 18),
+				MaxTextSize = 14,
+				TextColor3 = Color3.fromRGB(110, 90, 70),
+			}),
+		}))
+	end
+	note("🎁 Open treasure chests in the wild to upgrade your gear. The further out the chest, the better the gear inside.")
+
+	heading(string.format("🎒 Backpack  %d/%d", if current then current.carried else 0, if current then current.capacity else 0))
+	local carryingAny = false
+	for _, food in Config.Foods do
+		local amount = inventory[food.id] or 0
+		if amount > 0 then
+			carryingAny = true
+			local row = create("Frame", {
+				BackgroundColor3 = PANEL_DARK,
+				Size = UDim2.new(1, -8, 0, 44),
+			}, {
+				corner(10),
+				padding(6),
+				label({
+					Text = string.format("%s %s × %d", food.emoji, food.name, amount),
+					Size = UDim2.new(0.65, 0, 1, 0),
+					MaxTextSize = 18,
+				}),
+			})
+			local drop = button("Drop", RED, function()
+				actionEvent:FireServer("DropFood", food.id)
+			end)
+			drop.AnchorPoint = Vector2.new(1, 0.5)
+			drop.Position = UDim2.new(1, 0, 0.5, 0)
+			drop.Size = UDim2.new(0.3, 0, 1, 0)
+			drop.Parent = row
+			add(row)
+		end
+	end
+	if not carryingAny then
+		note("Your backpack is empty. Head out into the wild and forage!")
+	end
+
+	heading("Where to find food")
+	for _, food in Config.Foods do
+		local ring = Config.Rings[food.ring]
+		local eaters = {}
+		for _, species in Config.Species do
+			if species.food == food.id then
+				table.insert(eaters, species.name)
+			end
+		end
+		add(create("Frame", {
+			BackgroundColor3 = PANEL_DARK,
+			Size = UDim2.new(1, -8, 0, 50),
+		}, {
+			corner(10),
+			padding(6),
+			label({
+				Text = string.format("%s %s — %s", food.emoji, food.name, ring.name),
+				Size = UDim2.new(1, 0, 0, 20),
+				MaxTextSize = 18,
+			}),
+			label({
+				Text = string.format(
+					"%d–%d studs from the zoo • fed to %s",
+					ring.inner,
+					ring.outer,
+					table.concat(eaters, ", ")
+				),
+				Position = UDim2.fromOffset(0, 22),
+				Size = UDim2.new(1, 0, 0, 16),
+				MaxTextSize = 13,
+				TextColor3 = Color3.fromRGB(110, 90, 70),
+			}),
+		}))
+	end
+end
+
+---------------------------------------------------------------------------
+-- Foraging prompts: hold time depends on the player's gloves
+---------------------------------------------------------------------------
+
+local glovesMultiplier = 1
+
+local function updateForagePrompt(prompt: Instance)
+	if prompt:IsA("ProximityPrompt") then
+		local baseTime = prompt:GetAttribute("BaseTime")
+		if type(baseTime) == "number" then
+			prompt.HoldDuration = baseTime * glovesMultiplier
+		end
+	end
+end
+
+CollectionService:GetInstanceAddedSignal("ForagePrompt"):Connect(updateForagePrompt)
+for _, prompt in CollectionService:GetTagged("ForagePrompt") do
+	updateForagePrompt(prompt)
+end
+
+---------------------------------------------------------------------------
 -- State updates
 ---------------------------------------------------------------------------
 
@@ -714,6 +988,27 @@ stateUpdate.OnClientEvent:Connect(function(newState: State)
 	if penPanel.Visible then
 		renderPen()
 	end
+
+	backpackLabel.Text = string.format("🎒 %d/%d", newState.carried, newState.capacity)
+	local carrying = {}
+	for _, food in Config.Foods do
+		local amount = newState.inventory[food.id]
+		if amount and amount > 0 then
+			table.insert(carrying, food.emoji .. amount)
+		end
+	end
+	carryingLabel.Text = if #carrying > 0 then table.concat(carrying, "  ") else "Empty — go forage!"
+	backpackLabel.TextColor3 = if newState.carried >= newState.capacity then RED else TEXT
+
+	local multiplier = Config.getEquipmentValue("Gloves", newState.equipment.Gloves or 0)
+	if multiplier ~= glovesMultiplier then
+		glovesMultiplier = multiplier
+		for _, prompt in CollectionService:GetTagged("ForagePrompt") do
+			updateForagePrompt(prompt)
+		end
+	end
+
+	renderGear(false)
 end)
 
 ---------------------------------------------------------------------------
@@ -762,9 +1057,10 @@ local function fitToScreen(panel: GuiObject, baseSize: Vector2, widthShare: numb
 	screen:GetPropertyChangedSignal("AbsoluteSize"):Connect(update)
 end
 
-fitToScreen(hud, Vector2.new(230, 140), 0.45, 0.35)
+fitToScreen(hud, Vector2.new(230, 184), 0.45, 0.4)
 fitToScreen(penPanel, Vector2.new(340, 440), 1, 1)
 fitToScreen(zooBookPanel, Vector2.new(460, 380), 1, 1)
+fitToScreen(gearPanel, Vector2.new(460, 420), 1, 1)
 
 ---------------------------------------------------------------------------
 -- Close the pen panel when the player walks away from its sign
@@ -800,4 +1096,6 @@ task.delay(4, function()
 	local onTouch = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
 	local how = if onTouch then "tap the button that pops up" else "press E"
 	showToast("Welcome to your zoo! Walk up to a pen sign and " .. how .. " to manage it.", "info")
+	task.wait(4.5)
+	showToast("Animals need food! Forage it out in the wild and fill each pen's food store.", "info")
 end)

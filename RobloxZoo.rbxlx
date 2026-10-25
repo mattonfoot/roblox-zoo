@@ -349,7 +349,7 @@ return AnimalBuilder
         <Properties>
           <string name="Name">Config</string>
           <string name="Source"><![CDATA[--!strict
--- Game balance and animal definitions shared by server and client.
+-- Game balance and definitions shared by server and client.
 
 export type Visual = {
 	shape: string, -- "quadruped" or "biped"
@@ -366,7 +366,8 @@ export type Species = {
 	id: string,
 	name: string,
 	price: number, -- cost to buy a baby
-	feedCost: number, -- cost to feed one animal
+	food: string, -- id of the food it eats
+	mealSize: number, -- food units eaten per meal
 	growTime: number, -- seconds of being fed needed to reach adult
 	income: number, -- coins per second from visitors, adults only
 	sellPrice: number, -- what an adult sells for
@@ -377,6 +378,32 @@ export type Species = {
 	visual: Visual,
 }
 
+export type Food = {
+	id: string,
+	name: string,
+	emoji: string,
+	ring: number, -- which wild ring it grows in (further = rarer)
+	yield: number, -- units gathered per forage
+	harvestTime: number, -- seconds to forage with basic gloves
+}
+
+export type Ring = {
+	name: string,
+	inner: number, -- distance from the centre of the map
+	outer: number,
+	color: Color3,
+	material: Enum.Material,
+}
+
+export type Equipment = {
+	id: string,
+	name: string,
+	emoji: string,
+	description: string,
+	tierNames: { string },
+	values: { number }, -- value at level 0, 1, 2, ... (index = level + 1)
+}
+
 local Config = {}
 
 Config.StartingCoins = 150
@@ -385,9 +412,14 @@ Config.PenSize = 24
 Config.PenPrices = { 0, 0, 200, 500, 1200, 3000, 7000, 15000 }
 Config.MaxPlots = 6
 
+-- Hunger and health
 Config.HungerMax = 100
-Config.HungerDrainPerSecond = 100 / 120 -- a full belly lasts two minutes
+Config.HungerDrainPerSecond = 100 / 240 -- a full belly lasts four minutes
+Config.EatThreshold = 40 -- animals eat from the pen's food store below this
 Config.WellFedThreshold = 50 -- below this, animals grow at half speed
+Config.HealthMax = 100
+Config.StarveDamagePerSecond = 100 / 90 -- a starving animal dies after 90 seconds
+Config.HealthRegenPerSecond = 2
 
 Config.BabyStageEnd = 0.4 -- growth fraction where a baby becomes a juvenile
 Config.StageScale = { Baby = 0.45, Juvenile = 0.7, Adult = 1 }
@@ -402,16 +434,83 @@ Config.BabySellFraction = 0.5 -- non-adults sell for this share of their price
 
 Config.AutosaveInterval = 60
 
+-- Foraging
+Config.StockDistance = 20 -- how close to a pen sign you must be to stock it
+Config.NodesPerFood = 8
+Config.NodeRegrowTime = 20
+Config.ChestsPerRing = { 4, 3, 3, 2 }
+Config.ChestRespawnTime = 45
+Config.ChestCoinRewards = { 60, 200, 600, 1500 } -- when a chest has no upgrade left for you
+
 local function rgb(r: number, g: number, b: number): Color3
 	return Color3.fromRGB(r, g, b)
 end
+
+-- Wild areas around the zoo. Rarer food grows further out.
+Config.Rings = {
+	{ name = "Meadow", inner = 200, outer = 300, color = rgb(140, 195, 95), material = Enum.Material.Grass },
+	{ name = "Plains", inner = 300, outer = 420, color = rgb(195, 185, 105), material = Enum.Material.Grass },
+	{ name = "Forest", inner = 420, outer = 560, color = rgb(60, 115, 55), material = Enum.Material.LeafyGrass },
+	{ name = "Savanna", inner = 560, outer = 720, color = rgb(210, 165, 95), material = Enum.Material.Sand },
+} :: { Ring }
+
+Config.Foods = {
+	{ id = "Carrot", name = "Carrots", emoji = "🥕", ring = 1, yield = 5, harvestTime = 2 },
+	{ id = "Fish", name = "Fish", emoji = "🐟", ring = 1, yield = 5, harvestTime = 2.5 },
+	{ id = "Hay", name = "Hay", emoji = "🌾", ring = 2, yield = 6, harvestTime = 3 },
+	{ id = "Bamboo", name = "Bamboo", emoji = "🎋", ring = 3, yield = 8, harvestTime = 3.5 },
+	{ id = "Meat", name = "Meat", emoji = "🥩", ring = 3, yield = 8, harvestTime = 3.5 },
+	{ id = "Leaves", name = "Acacia Leaves", emoji = "🌿", ring = 4, yield = 10, harvestTime = 4 },
+	{ id = "Melon", name = "Melons", emoji = "🍉", ring = 4, yield = 10, harvestTime = 4 },
+} :: { Food }
+
+Config.FoodById = {} :: { [string]: Food }
+for _, food in Config.Foods do
+	Config.FoodById[food.id] = food
+end
+
+-- Equipment found in chests. Level 0 is what you start with.
+Config.Equipment = {
+	{
+		id = "Gloves",
+		name = "Gloves",
+		emoji = "🧤",
+		description = "Forage faster",
+		tierNames = { "Bare Hands", "Work Gloves", "Sturdy Gloves", "Expert Gloves", "Legendary Gloves" },
+		values = { 1, 0.75, 0.55, 0.4, 0.3 }, -- foraging time multiplier
+	},
+	{
+		id = "Backpack",
+		name = "Backpack",
+		emoji = "🎒",
+		description = "Carry more food",
+		tierNames = { "Small Pouch", "Satchel", "Backpack", "Explorer Pack", "Legendary Pack" },
+		values = { 15, 25, 40, 60, 90 }, -- food units you can carry
+	},
+	{
+		id = "Pantry",
+		name = "Pantry",
+		emoji = "🏠",
+		description = "Bigger pen food stores",
+		tierNames = { "Small Bin", "Crate", "Pantry", "Storehouse", "Legendary Silo" },
+		values = { 30, 50, 80, 120, 180 }, -- food units each pen can store
+	},
+} :: { Equipment }
+
+Config.EquipmentById = {} :: { [string]: Equipment }
+for _, equipment in Config.Equipment do
+	Config.EquipmentById[equipment.id] = equipment
+end
+
+Config.MaxEquipmentLevel = 4
 
 Config.Species = {
 	{
 		id = "Rabbit",
 		name = "Rabbit",
 		price = 40,
-		feedCost = 3,
+		food = "Carrot",
+		mealSize = 1,
 		growTime = 45,
 		income = 1,
 		sellPrice = 90,
@@ -434,7 +533,8 @@ Config.Species = {
 		id = "Penguin",
 		name = "Penguin",
 		price = 120,
-		feedCost = 6,
+		food = "Fish",
+		mealSize = 1,
 		growTime = 75,
 		income = 3,
 		sellPrice = 260,
@@ -457,7 +557,8 @@ Config.Species = {
 		id = "Goat",
 		name = "Goat",
 		price = 300,
-		feedCost = 10,
+		food = "Hay",
+		mealSize = 2,
 		growTime = 100,
 		income = 6,
 		sellPrice = 600,
@@ -480,7 +581,8 @@ Config.Species = {
 		id = "Zebra",
 		name = "Zebra",
 		price = 700,
-		feedCost = 20,
+		food = "Hay",
+		mealSize = 2,
 		growTime = 140,
 		income = 12,
 		sellPrice = 1400,
@@ -503,7 +605,8 @@ Config.Species = {
 		id = "Panda",
 		name = "Panda",
 		price = 1500,
-		feedCost = 35,
+		food = "Bamboo",
+		mealSize = 3,
 		growTime = 180,
 		income = 25,
 		sellPrice = 3000,
@@ -526,7 +629,8 @@ Config.Species = {
 		id = "Lion",
 		name = "Lion",
 		price = 3000,
-		feedCost = 60,
+		food = "Meat",
+		mealSize = 3,
 		growTime = 240,
 		income = 45,
 		sellPrice = 6000,
@@ -549,7 +653,8 @@ Config.Species = {
 		id = "Giraffe",
 		name = "Giraffe",
 		price = 6000,
-		feedCost = 100,
+		food = "Leaves",
+		mealSize = 4,
 		growTime = 300,
 		income = 80,
 		sellPrice = 12000,
@@ -572,7 +677,8 @@ Config.Species = {
 		id = "Elephant",
 		name = "Elephant",
 		price = 12000,
-		feedCost = 180,
+		food = "Melon",
+		mealSize = 5,
 		growTime = 360,
 		income = 150,
 		sellPrice = 24000,
@@ -619,6 +725,11 @@ function Config.getPenPrice(penIndex: number): number
 	return Config.PenPrices[penIndex] or math.huge
 end
 
+function Config.getEquipmentValue(equipmentId: string, level: number): number
+	local equipment = Config.EquipmentById[equipmentId]
+	return equipment.values[math.clamp(level, 0, Config.MaxEquipmentLevel) + 1]
+end
+
 return Config
 ]]></string>
         </Properties>
@@ -650,11 +761,14 @@ export type SavedAnimal = {
 	species: string,
 	growth: number,
 	hunger: number,
+	health: number,
 }
 
 export type SavedPen = {
 	unlocked: boolean,
 	animals: { SavedAnimal },
+	storeFood: string?, -- which food the store holds
+	storeAmount: number,
 }
 
 export type SaveData = {
@@ -662,11 +776,13 @@ export type SaveData = {
 	coins: number,
 	pens: { SavedPen },
 	discovered: { [string]: boolean },
+	inventory: { [string]: number },
+	equipment: { [string]: number },
 }
 
 local DataService = {}
 
-local DATA_VERSION = 1
+local DATA_VERSION = 2
 local store: DataStore? = nil
 do
 	local ok, result = pcall(function()
@@ -689,14 +805,31 @@ function DataService.newData(): SaveData
 		table.insert(pens, {
 			unlocked = Config.getPenPrice(i) == 0,
 			animals = {},
+			storeFood = nil,
+			storeAmount = 0,
 		})
+	end
+	local equipment = {}
+	for _, item in Config.Equipment do
+		equipment[item.id] = 0
 	end
 	return {
 		version = DATA_VERSION,
 		coins = Config.StartingCoins,
 		pens = pens,
 		discovered = {},
+		-- A few carrots so new players can stock their first rabbit pen.
+		inventory = { Carrot = 10 },
+		equipment = equipment,
 	}
+end
+
+local function number(value: any, default: number): number
+	local n = tonumber(value)
+	if n == nil or n ~= n then
+		return default
+	end
+	return n
 end
 
 -- Cleans loaded data so bad or old saves can't break the game.
@@ -705,9 +838,8 @@ local function sanitize(raw: any): SaveData
 	if type(raw) ~= "table" then
 		return data
 	end
-	if type(raw.coins) == "number" and raw.coins == raw.coins then
-		data.coins = math.max(0, math.floor(raw.coins))
-	end
+	data.coins = math.max(0, math.floor(number(raw.coins, data.coins)))
+
 	if type(raw.discovered) == "table" then
 		for id, value in raw.discovered do
 			if Config.SpeciesById[id] and value == true then
@@ -715,27 +847,60 @@ local function sanitize(raw: any): SaveData
 			end
 		end
 	end
+
+	if type(raw.equipment) == "table" then
+		for id in data.equipment do
+			data.equipment[id] = math.clamp(math.floor(number(raw.equipment[id], 0)), 0, Config.MaxEquipmentLevel)
+		end
+	end
+
+	if type(raw.inventory) == "table" then
+		data.inventory = {}
+		local capacity = Config.getEquipmentValue("Backpack", data.equipment.Backpack)
+		local carried = 0
+		for id, amount in raw.inventory do
+			if Config.FoodById[id] then
+				local n = math.clamp(math.floor(number(amount, 0)), 0, capacity - carried)
+				if n > 0 then
+					data.inventory[id] = n
+					carried += n
+				end
+			end
+		end
+	end
+
 	if type(raw.pens) == "table" then
+		local storeCapacity = Config.getEquipmentValue("Pantry", data.equipment.Pantry)
 		for i, pen in data.pens do
 			local rawPen = raw.pens[i]
-			if type(rawPen) == "table" then
-				pen.unlocked = pen.unlocked or rawPen.unlocked == true
-				if pen.unlocked and type(rawPen.animals) == "table" then
-					local penSpecies: string? = nil
-					for _, a in rawPen.animals do
-						if #pen.animals >= Config.PenCapacity then
-							break
-						end
-						local species = if type(a) == "table" then Config.SpeciesById[a.species] else nil
-						-- A pen only ever holds one species.
-						if species and (penSpecies == nil or penSpecies == species.id) then
-							penSpecies = species.id
-							table.insert(pen.animals, {
-								species = species.id,
-								growth = math.clamp(tonumber(a.growth) or 0, 0, species.growTime),
-								hunger = math.clamp(tonumber(a.hunger) or 0, 0, Config.HungerMax),
-							})
-						end
+			if type(rawPen) ~= "table" then
+				continue
+			end
+			pen.unlocked = pen.unlocked or rawPen.unlocked == true
+			if not pen.unlocked then
+				continue
+			end
+			if type(rawPen.storeFood) == "string" and Config.FoodById[rawPen.storeFood] then
+				pen.storeFood = rawPen.storeFood
+				pen.storeAmount = math.clamp(number(rawPen.storeAmount, 0), 0, storeCapacity)
+			end
+			if type(rawPen.animals) == "table" then
+				local penSpecies: string? = nil
+				for _, a in rawPen.animals do
+					if #pen.animals >= Config.PenCapacity then
+						break
+					end
+					local species = if type(a) == "table" then Config.SpeciesById[a.species] else nil
+					-- A pen only ever holds one species.
+					if species and (penSpecies == nil or penSpecies == species.id) then
+						penSpecies = species.id
+						table.insert(pen.animals, {
+							species = species.id,
+							growth = math.clamp(number(a.growth, 0), 0, species.growTime),
+							hunger = math.clamp(number(a.hunger, Config.HungerMax), 0, Config.HungerMax),
+							-- Health was added in version 2; older animals start healthy.
+							health = math.clamp(number(a.health, Config.HealthMax), 1, Config.HealthMax),
+						})
 					end
 				end
 			end
@@ -785,7 +950,508 @@ return DataService
 ]]></string>
         </Properties>
       </Item>
-      <Item class="Script" referent="8">
+      <Item class="ModuleScript" referent="8">
+        <Properties>
+          <string name="Name">ForageService</string>
+          <string name="Source"><![CDATA[--!strict
+-- Food foraging and treasure chests out in the wild rings around the zoo.
+--
+-- Food nodes (carrot patches, fish ponds, hay bales...) grow in the ring for
+-- their food: rarer food is further away. Players hold a prompt to forage,
+-- which fills their backpack. Nodes regrow after a short time.
+--
+-- Chests appear at random spots in each ring. Opening one upgrades a random
+-- piece of equipment, up to a level that depends on how far out the chest is.
+
+local CollectionService = game:GetService("CollectionService")
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Config = require(ReplicatedStorage.Shared.Config)
+
+export type Api = {
+	getZoo: (player: Player) -> any,
+	carried: (zoo: any) -> number,
+	capacity: (zoo: any) -> number,
+	changed: (zoo: any) -> (),
+	notify: (player: Player, text: string, kind: string?) -> (),
+}
+
+type Node = {
+	food: Config.Food,
+	model: Model,
+	prompt: ProximityPrompt,
+	marker: BillboardGui,
+	ready: boolean,
+}
+
+local ForageService = {}
+
+local api: Api
+local folder: Folder
+local usedSpots: { Vector3 } = {}
+local holdStarts: { [ProximityPrompt]: { [Player]: number } } = {}
+
+local MIN_GLOVES = Config.EquipmentById.Gloves.values[#Config.EquipmentById.Gloves.values]
+
+local function rgb(r: number, g: number, b: number): Color3
+	return Color3.fromRGB(r, g, b)
+end
+
+local function part(model: Model, props: { [string]: any }): Part
+	local p = Instance.new("Part")
+	p.Anchored = true
+	p.TopSurface = Enum.SurfaceType.Smooth
+	p.BottomSurface = Enum.SurfaceType.Smooth
+	for key, value in props do
+		(p :: any)[key] = value
+	end
+	p:SetAttribute("BaseTransparency", p.Transparency)
+	p.Parent = model
+	return p
+end
+
+local function emojiMarker(parent: Instance, text: string, maxDistance: number): BillboardGui
+	local gui = Instance.new("BillboardGui")
+	gui.Size = UDim2.fromOffset(44, 44)
+	gui.StudsOffset = Vector3.new(0, 6, 0)
+	gui.MaxDistance = maxDistance
+	gui.AlwaysOnTop = true
+	local label = Instance.new("TextLabel")
+	label.Size = UDim2.fromScale(1, 1)
+	label.BackgroundTransparency = 1
+	label.TextScaled = true
+	label.Text = text
+	label.Parent = gui
+	gui.Parent = parent
+	return gui
+end
+
+-- Picks a random spot inside a ring that isn't too close to other things.
+local function randomSpot(ring: Config.Ring): Vector3
+	local best = Vector3.zero
+	for _ = 1, 15 do
+		local angle = math.random() * math.pi * 2
+		-- sqrt keeps points evenly spread over the ring's area.
+		local inner, outer = ring.inner + 10, ring.outer - 10
+		local radius = math.sqrt(inner * inner + math.random() * (outer * outer - inner * inner))
+		local spot = Vector3.new(math.cos(angle) * radius, 0, math.sin(angle) * radius)
+		best = spot
+		local clear = true
+		for _, used in usedSpots do
+			if (used - spot).Magnitude < 18 then
+				clear = false
+				break
+			end
+		end
+		if clear then
+			break
+		end
+	end
+	table.insert(usedSpots, best)
+	return best
+end
+
+local function releaseSpot(spot: Vector3)
+	for i, used in usedSpots do
+		if (used - spot).Magnitude < 0.1 then
+			table.remove(usedSpots, i)
+			return
+		end
+	end
+end
+
+---------------------------------------------------------------------------
+-- Food node models. Each returns the part that holds the prompt.
+---------------------------------------------------------------------------
+
+local function buildFoodModel(model: Model, foodId: string, at: CFrame): Part
+	if foodId == "Carrot" then
+		local base = part(model, {
+			Name = "Base",
+			Size = Vector3.new(5, 0.6, 5),
+			CFrame = at * CFrame.new(0, 0.3, 0),
+			Color = rgb(110, 75, 45),
+			Material = Enum.Material.Ground,
+		})
+		for i = 1, 4 do
+			local x, z = (i % 2) * 2 - 1, (if i > 2 then 1 else -1)
+			part(model, {
+				Name = "Carrot",
+				Size = Vector3.new(0.5, 0.9, 0.5),
+				CFrame = at * CFrame.new(x * 1.2, 0.9, z * 1.2),
+				Color = rgb(240, 130, 30),
+				CanCollide = false,
+			})
+			part(model, {
+				Name = "Leaves",
+				Size = Vector3.new(0.6, 0.8, 0.2),
+				CFrame = at * CFrame.new(x * 1.2, 1.7, z * 1.2),
+				Color = rgb(70, 160, 50),
+				CanCollide = false,
+			})
+		end
+		return base
+	elseif foodId == "Fish" then
+		local base = part(model, {
+			Name = "Base",
+			Shape = Enum.PartType.Cylinder,
+			Size = Vector3.new(0.4, 9, 9),
+			CFrame = at * CFrame.new(0, 0.2, 0) * CFrame.Angles(0, 0, math.rad(90)),
+			Color = rgb(60, 130, 200),
+			Material = Enum.Material.Glass,
+			Transparency = 0.2,
+			CanCollide = false,
+		})
+		for i = 1, 2 do
+			part(model, {
+				Name = "Fish",
+				Size = Vector3.new(0.4, 0.4, 1.2),
+				CFrame = at * CFrame.new(i * 2 - 3, 0.45, i - 1.5) * CFrame.Angles(0, math.rad(i * 70), 0),
+				Color = rgb(250, 150, 60),
+				CanCollide = false,
+			})
+		end
+		return base
+	elseif foodId == "Hay" then
+		local base = part(model, {
+			Name = "Base",
+			Size = Vector3.new(4, 2.5, 3),
+			CFrame = at * CFrame.new(0, 1.25, 0),
+			Color = rgb(225, 195, 90),
+			Material = Enum.Material.Grass,
+		})
+		part(model, {
+			Name = "Hay",
+			Size = Vector3.new(3, 2, 2.5),
+			CFrame = at * CFrame.new(2.5, 1, 1.5) * CFrame.Angles(0, math.rad(30), 0),
+			Color = rgb(215, 185, 80),
+			Material = Enum.Material.Grass,
+		})
+		return base
+	elseif foodId == "Bamboo" then
+		local base = part(model, {
+			Name = "Base",
+			Size = Vector3.new(5, 0.4, 5),
+			CFrame = at * CFrame.new(0, 0.2, 0),
+			Color = rgb(70, 110, 50),
+			Material = Enum.Material.Grass,
+		})
+		for i = 1, 6 do
+			local angle = i * math.pi / 3
+			local height = 7 + (i % 3) * 1.5
+			part(model, {
+				Name = "Stalk",
+				Shape = Enum.PartType.Cylinder,
+				Size = Vector3.new(height, 0.5, 0.5),
+				CFrame = at * CFrame.new(math.cos(angle) * 1.5, height / 2, math.sin(angle) * 1.5) * CFrame.Angles(
+					0,
+					0,
+					math.rad(90)
+				),
+				Color = rgb(120, 175, 70),
+				Material = Enum.Material.Wood,
+			})
+		end
+		return base
+	elseif foodId == "Meat" then
+		local base = part(model, {
+			Name = "Base",
+			Size = Vector3.new(3, 2.4, 3),
+			CFrame = at * CFrame.new(0, 1.2, 0),
+			Color = rgb(130, 90, 55),
+			Material = Enum.Material.WoodPlanks,
+		})
+		part(model, {
+			Name = "Meat",
+			Size = Vector3.new(2.2, 0.6, 1.4),
+			CFrame = at * CFrame.new(0, 2.7, 0),
+			Color = rgb(200, 70, 70),
+			CanCollide = false,
+		})
+		part(model, {
+			Name = "Bone",
+			Size = Vector3.new(0.3, 0.3, 2.2),
+			CFrame = at * CFrame.new(0, 2.8, 0) * CFrame.Angles(0, math.rad(90), 0),
+			Color = rgb(245, 240, 225),
+			CanCollide = false,
+		})
+		return base
+	elseif foodId == "Leaves" then
+		local base = part(model, {
+			Name = "Base",
+			Size = Vector3.new(1.2, 9, 1.2),
+			CFrame = at * CFrame.new(0, 4.5, 0),
+			Color = rgb(110, 75, 45),
+			Material = Enum.Material.Wood,
+		})
+		part(model, {
+			Name = "Canopy",
+			Shape = Enum.PartType.Cylinder,
+			Size = Vector3.new(1.8, 12, 12),
+			CFrame = at * CFrame.new(0, 9.5, 0) * CFrame.Angles(0, 0, math.rad(90)),
+			Color = rgb(85, 140, 55),
+			Material = Enum.Material.LeafyGrass,
+		})
+		return base
+	else -- Melon
+		local base = part(model, {
+			Name = "Base",
+			Size = Vector3.new(6, 0.4, 5),
+			CFrame = at * CFrame.new(0, 0.2, 0),
+			Color = rgb(110, 75, 45),
+			Material = Enum.Material.Ground,
+		})
+		for i = 1, 3 do
+			part(model, {
+				Name = "Melon",
+				Shape = Enum.PartType.Ball,
+				Size = Vector3.new(1.8, 1.8, 1.8),
+				CFrame = at * CFrame.new(i * 1.8 - 3.6, 1.2, (i % 2) - 0.5),
+				Color = rgb(60, 130, 50),
+			})
+		end
+		return base
+	end
+end
+
+local function setNodeReady(node: Node, ready: boolean)
+	node.ready = ready
+	node.prompt.Enabled = ready
+	node.marker.Enabled = ready
+	for _, child in node.model:GetChildren() do
+		if child:IsA("BasePart") then
+			local baseTransparency = (child:GetAttribute("BaseTransparency") :: number?) or 0
+			child.Transparency = if ready then baseTransparency else math.max(baseTransparency, 0.75)
+		end
+	end
+end
+
+local function requiredHoldTime(zoo: any, food: Config.Food): number
+	return food.harvestTime * Config.getEquipmentValue("Gloves", zoo.equipment.Gloves or 0)
+end
+
+local function trackHolds(prompt: ProximityPrompt)
+	holdStarts[prompt] = {}
+	prompt.PromptButtonHoldBegan:Connect(function(player)
+		local starts = holdStarts[prompt]
+		if starts then
+			starts[player] = os.clock()
+		end
+	end)
+	prompt.PromptButtonHoldEnded:Connect(function(player)
+		-- Keep the start time briefly: Triggered can arrive just after this.
+		local started = holdStarts[prompt] and holdStarts[prompt][player]
+		task.delay(0.5, function()
+			local starts = holdStarts[prompt]
+			if starts and starts[player] == started then
+				starts[player] = nil
+			end
+		end)
+	end)
+end
+
+-- Checks the player really held the prompt long enough for their gloves.
+local function heldLongEnough(prompt: ProximityPrompt, player: Player, required: number): boolean
+	local starts = holdStarts[prompt]
+	local started = starts and starts[player]
+	if not started then
+		return false
+	end
+	return os.clock() - started >= required * 0.85 - 0.2
+end
+
+local function createNode(food: Config.Food)
+	local ring = Config.Rings[food.ring]
+	local spot = randomSpot(ring)
+	local model = Instance.new("Model")
+	model.Name = food.name
+	local at = CFrame.new(spot) * CFrame.Angles(0, math.random() * math.pi * 2, 0)
+	local base = buildFoodModel(model, food.id, at)
+
+	local prompt = Instance.new("ProximityPrompt")
+	prompt.ActionText = "Forage"
+	prompt.ObjectText = food.emoji .. " " .. food.name
+	prompt.KeyboardKeyCode = Enum.KeyCode.E
+	-- The client sets the real hold time for its own gloves; the server
+	-- checks it. This server value is just the fastest possible.
+	prompt.HoldDuration = food.harvestTime * MIN_GLOVES
+	prompt:SetAttribute("BaseTime", food.harvestTime)
+	prompt.MaxActivationDistance = 12
+	prompt.RequiresLineOfSight = false
+	prompt.Parent = base
+	CollectionService:AddTag(prompt, "ForagePrompt")
+
+	local node: Node = {
+		food = food,
+		model = model,
+		prompt = prompt,
+		marker = emojiMarker(base, food.emoji, 160),
+		ready = true,
+	}
+	model.Parent = folder
+	trackHolds(prompt)
+
+	prompt.Triggered:Connect(function(player)
+		local zoo = api.getZoo(player)
+		if not zoo then
+			return
+		end
+		if not node.ready then
+			api.notify(player, "Someone got here first! It will grow back soon.", "info")
+			return
+		end
+		if not heldLongEnough(prompt, player, requiredHoldTime(zoo, food)) then
+			return
+		end
+		local space = api.capacity(zoo) - api.carried(zoo)
+		if space <= 0 then
+			api.notify(player, "🎒 Your backpack is full! Take the food back to your pens.", "error")
+			return
+		end
+		local amount = math.min(food.yield, space)
+		zoo.inventory[food.id] = (zoo.inventory[food.id] or 0) + amount
+		setNodeReady(node, false)
+		api.notify(player, string.format("Foraged %d %s %s!", amount, food.emoji, food.name), "success")
+		api.changed(zoo)
+		task.delay(Config.NodeRegrowTime, function()
+			setNodeReady(node, true)
+		end)
+	end)
+end
+
+---------------------------------------------------------------------------
+-- Chests
+---------------------------------------------------------------------------
+
+local function openChest(player: Player, ringIndex: number): boolean
+	local zoo = api.getZoo(player)
+	if not zoo then
+		return false
+	end
+
+	-- Chests further out can hold better equipment.
+	local maxLevel = math.min(ringIndex, Config.MaxEquipmentLevel)
+	local candidates = {}
+	for _, item in Config.Equipment do
+		if (zoo.equipment[item.id] or 0) < maxLevel then
+			table.insert(candidates, item)
+		end
+	end
+
+	if #candidates == 0 then
+		local coins = Config.ChestCoinRewards[ringIndex] or 100
+		zoo.coins += coins
+		api.notify(
+			player,
+			string.format(
+				"🎁 The chest held %d coins. Search further out than the %s for better gear!",
+				coins,
+				Config.Rings[ringIndex].name
+			),
+			"success"
+		)
+	else
+		local item = candidates[math.random(1, #candidates)]
+		local level = (zoo.equipment[item.id] or 0) + 1
+		zoo.equipment[item.id] = level
+		api.notify(
+			player,
+			string.format("🎁 You found %s %s! %s.", item.emoji, item.tierNames[level + 1], item.description),
+			"success"
+		)
+	end
+	api.changed(zoo)
+	return true
+end
+
+local function spawnChest(ringIndex: number)
+	local ring = Config.Rings[ringIndex]
+	local spot = randomSpot(ring)
+	local model = Instance.new("Model")
+	model.Name = "Chest"
+	local at = CFrame.new(spot) * CFrame.Angles(0, math.random() * math.pi * 2, 0)
+
+	local base = part(model, {
+		Name = "Base",
+		Size = Vector3.new(3, 1.8, 2),
+		CFrame = at * CFrame.new(0, 0.9, 0),
+		Color = rgb(120, 70, 35),
+		Material = Enum.Material.WoodPlanks,
+	})
+	local lid = part(model, {
+		Name = "Lid",
+		Size = Vector3.new(3.2, 0.7, 2.2),
+		CFrame = at * CFrame.new(0, 2.15, 0),
+		Color = rgb(240, 190, 50),
+		Material = Enum.Material.Metal,
+	})
+	local light = Instance.new("PointLight")
+	light.Color = rgb(255, 220, 120)
+	light.Range = 10
+	light.Brightness = 2
+	light.Parent = lid
+	local sparkles = Instance.new("Sparkles")
+	sparkles.SparkleColor = rgb(255, 230, 120)
+	sparkles.Parent = lid
+	emojiMarker(base, "🎁", 220)
+
+	local prompt = Instance.new("ProximityPrompt")
+	prompt.ActionText = "Open"
+	prompt.ObjectText = "Treasure chest"
+	prompt.KeyboardKeyCode = Enum.KeyCode.E
+	prompt.HoldDuration = 1
+	prompt.MaxActivationDistance = 12
+	prompt.RequiresLineOfSight = false
+	prompt.Parent = base
+	trackHolds(prompt)
+
+	local opened = false
+	prompt.Triggered:Connect(function(player)
+		if opened or not heldLongEnough(prompt, player, 1) then
+			return
+		end
+		if openChest(player, ringIndex) then
+			opened = true
+			holdStarts[prompt] = nil
+			model:Destroy()
+			releaseSpot(spot)
+			task.delay(Config.ChestRespawnTime, spawnChest, ringIndex)
+		end
+	end)
+
+	model.Parent = folder
+end
+
+function ForageService.start(serviceApi: Api)
+	api = serviceApi
+	folder = Instance.new("Folder")
+	folder.Name = "Wilds"
+	folder.Parent = workspace
+
+	for _, food in Config.Foods do
+		for _ = 1, Config.NodesPerFood do
+			createNode(food)
+		end
+	end
+	for ringIndex, count in Config.ChestsPerRing do
+		for _ = 1, count do
+			spawnChest(ringIndex)
+		end
+	end
+
+	Players.PlayerRemoving:Connect(function(player)
+		for _, starts in holdStarts do
+			starts[player] = nil
+		end
+	end)
+end
+
+return ForageService
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="Script" referent="9">
         <Properties>
           <string name="Name">Main</string>
           <token name="RunContext">0</token>
@@ -796,7 +1462,7 @@ ZooService.start()
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="9">
+      <Item class="ModuleScript" referent="10">
         <Properties>
           <string name="Name">WorldBuilder</string>
           <string name="Source"><![CDATA[--!strict
@@ -870,12 +1536,75 @@ function WorldBuilder.buildEnvironment(): Folder
 
 	makePart({
 		Name = "Ground",
-		Size = Vector3.new(600, 2, 600),
+		Size = Vector3.new(1600, 2, 1600),
 		CFrame = CFrame.new(0, -1, 0),
 		Color = Color3.fromRGB(95, 155, 70),
 		Material = Enum.Material.Grass,
 		Parent = folder,
 	})
+
+	-- Wild rings around the zoo, drawn as flat discs from the outside in.
+	-- Rarer food grows in the outer rings.
+	for ringIndex = #Config.Rings, 1, -1 do
+		local ring = Config.Rings[ringIndex]
+		makePart({
+			Name = ring.name,
+			Shape = Enum.PartType.Cylinder,
+			Size = Vector3.new(0.2, ring.outer * 2, ring.outer * 2),
+			CFrame = CFrame.new(0, -0.1 + 0.02 * (#Config.Rings - ringIndex + 1), 0) * CFrame.Angles(0, 0, math.rad(90)),
+			Color = ring.color,
+			Material = ring.material,
+			Parent = folder,
+		})
+	end
+	makePart({
+		Name = "ZooGrounds",
+		Shape = Enum.PartType.Cylinder,
+		Size = Vector3.new(0.2, Config.Rings[1].inner * 2, Config.Rings[1].inner * 2),
+		CFrame = CFrame.new(0, 0, 0) * CFrame.Angles(0, 0, math.rad(90)),
+		Color = Color3.fromRGB(95, 155, 70),
+		Material = Enum.Material.Grass,
+		Parent = folder,
+	})
+
+	-- Signs at the edge of each ring saying what food grows there.
+	for ringIndex, ring in Config.Rings do
+		local foods = {}
+		for _, food in Config.Foods do
+			if food.ring == ringIndex then
+				table.insert(foods, food.emoji .. " " .. food.name)
+			end
+		end
+		local text = ring.name .. "\n" .. table.concat(foods, "  ")
+		for i = 0, 3 do
+			local angle = i * math.pi / 2 + math.pi / 4
+			local position = Vector3.new(math.cos(angle), 0, math.sin(angle)) * (ring.inner + 4)
+			local facing = CFrame.lookAt(position, Vector3.new(0, 0, 0))
+			makePart({
+				Name = "RingSignPost",
+				Size = Vector3.new(0.6, 6, 0.6),
+				CFrame = facing * CFrame.new(0, 3, 0),
+				Color = WOOD,
+				Material = Enum.Material.Wood,
+				Parent = folder,
+			})
+			local board = makePart({
+				Name = "RingSign",
+				Size = Vector3.new(9, 3.5, 0.4),
+				CFrame = facing * CFrame.new(0, 6.5, 0),
+				Color = Color3.fromRGB(240, 225, 190),
+				Material = Enum.Material.WoodPlanks,
+				Parent = folder,
+			})
+			for _, face in { Enum.NormalId.Front, Enum.NormalId.Back } do
+				local gui = Instance.new("SurfaceGui")
+				gui.Face = face
+				gui.PixelsPerStud = 30
+				gui.Parent = board
+				makeLabel(gui, text, Color3.fromRGB(90, 55, 25))
+			end
+		end
+	end
 
 	makePart({
 		Name = "Road",
@@ -1173,11 +1902,11 @@ return WorldBuilder
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="10">
+      <Item class="ModuleScript" referent="11">
         <Properties>
           <string name="Name">ZooService</string>
           <string name="Source"><![CDATA[--!strict
--- Core zoo logic: plots, pens, animals, feeding, growth, breeding, income and actions.
+-- Core zoo logic: plots, pens, animals, food stores, growth, health, breeding, income and actions.
 --
 -- The server owns all game state. Each animal is a small "marker" instance
 -- (tagged ZooAnimal) whose attributes hold its species, stage and wander target.
@@ -1191,6 +1920,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Config = require(ReplicatedStorage.Shared.Config)
 local DataService = require(script.Parent.DataService)
+local ForageService = require(script.Parent.ForageService)
 local WorldBuilder = require(script.Parent.WorldBuilder)
 
 type Species = Config.Species
@@ -1200,10 +1930,12 @@ type Animal = {
 	species: Species,
 	growth: number,
 	hunger: number,
+	health: number,
 	stage: string,
 	marker: Configuration,
 	position: Vector3, -- where the animal is heading (or resting)
 	nextMoveAt: number,
+	warnedStarving: boolean,
 }
 
 type Pen = {
@@ -1211,15 +1943,19 @@ type Pen = {
 	unlocked: boolean,
 	animals: { Animal },
 	breedCooldown: number,
+	storeFood: string?,
+	storeAmount: number,
 	world: WorldBuilder.Pen,
 }
 
-type Zoo = {
+export type Zoo = {
 	player: Player,
 	plot: WorldBuilder.Plot,
 	coins: number,
 	pens: { Pen },
 	discovered: { [string]: boolean },
+	inventory: { [string]: number },
+	equipment: { [string]: number },
 	canSave: boolean,
 	loaded: boolean,
 	lastActionAt: number,
@@ -1233,7 +1969,6 @@ local plots: { WorldBuilder.Plot } = {}
 local plotOwners: { [number]: Player } = {}
 local zoos: { [Player]: Zoo } = {}
 
-local remotes: Folder
 local stateUpdate: RemoteEvent
 local openPen: RemoteEvent
 local notifyEvent: RemoteEvent
@@ -1259,6 +1994,22 @@ end
 -- State helpers
 ---------------------------------------------------------------------------
 
+local function carried(zoo: Zoo): number
+	local total = 0
+	for _, amount in zoo.inventory do
+		total += amount
+	end
+	return total
+end
+
+local function backpackCapacity(zoo: Zoo): number
+	return Config.getEquipmentValue("Backpack", zoo.equipment.Backpack or 0)
+end
+
+local function storeCapacity(zoo: Zoo): number
+	return Config.getEquipmentValue("Pantry", zoo.equipment.Pantry or 0)
+end
+
 local function computeRating(zoo: Zoo): number
 	local rating = 0
 	for _, pen in zoo.pens do
@@ -1283,15 +2034,23 @@ local function serialize(zoo: Zoo): DataService.SaveData
 				species = animal.species.id,
 				growth = math.floor(animal.growth * 10) / 10,
 				hunger = math.floor(animal.hunger * 10) / 10,
+				health = math.ceil(animal.health * 10) / 10,
 			})
 		end
-		table.insert(pens, { unlocked = pen.unlocked, animals = animals })
+		table.insert(pens, {
+			unlocked = pen.unlocked,
+			animals = animals,
+			storeFood = pen.storeFood,
+			storeAmount = math.floor(pen.storeAmount * 10) / 10,
+		})
 	end
 	return {
-		version = 1,
+		version = 2,
 		coins = math.floor(zoo.coins),
 		pens = pens,
 		discovered = table.clone(zoo.discovered),
+		inventory = table.clone(zoo.inventory),
+		equipment = table.clone(zoo.equipment),
 	}
 end
 
@@ -1301,6 +2060,7 @@ local function penSpecies(pen: Pen): Species?
 end
 
 local function buildClientState(zoo: Zoo)
+	local capacity = storeCapacity(zoo)
 	local pens = {}
 	for _, pen in zoo.pens do
 		local animals = {}
@@ -1311,6 +2071,7 @@ local function buildClientState(zoo: Zoo)
 				stage = animal.stage,
 				growth = math.clamp(animal.growth / animal.species.growTime, 0, 1),
 				hunger = animal.hunger / Config.HungerMax,
+				health = animal.health / Config.HealthMax,
 				sellPrice = Config.getSellPrice(animal.species, animal.growth),
 			})
 		end
@@ -1320,12 +2081,19 @@ local function buildClientState(zoo: Zoo)
 			price = Config.getPenPrice(pen.index),
 			species = if species then species.id else nil,
 			animals = animals,
+			storeFood = pen.storeFood,
+			storeAmount = math.floor(pen.storeAmount),
+			storeCapacity = capacity,
 		})
 	end
 	return {
 		coins = math.floor(zoo.coins),
 		rating = computeRating(zoo),
 		discovered = zoo.discovered,
+		inventory = zoo.inventory,
+		carried = carried(zoo),
+		capacity = backpackCapacity(zoo),
+		equipment = zoo.equipment,
 		pens = pens,
 	}
 end
@@ -1334,9 +2102,8 @@ local function pushState(zoo: Zoo)
 	if not zoo.loaded then
 		return
 	end
-	local rating = computeRating(zoo)
 	zoo.coinsValue.Value = math.floor(zoo.coins)
-	zoo.ratingValue.Value = rating
+	zoo.ratingValue.Value = computeRating(zoo)
 	stateUpdate:FireClient(zoo.player, buildClientState(zoo))
 end
 
@@ -1351,7 +2118,28 @@ local function resetPenVisual(worldPen: WorldBuilder.Pen)
 	worldPen.statusLabel.Text = ""
 end
 
-local function refreshPenVisual(pen: Pen)
+local function setTroughFill(pen: Pen, fraction: number)
+	local fill = pen.world.troughFill
+	if fraction <= 0 then
+		fill.Transparency = 1
+		return
+	end
+	fill.Transparency = 0
+	-- Grow the fill upward from the bottom of the trough.
+	local height = 0.1 + 0.7 * math.clamp(fraction, 0, 1)
+	local trough = pen.world.trough
+	fill.Size = Vector3.new(fill.Size.X, height, fill.Size.Z)
+	fill.CFrame = trough.CFrame * CFrame.new(0, -trough.Size.Y / 2 + 0.1 + height / 2, 0)
+	local food = if pen.storeFood then pen.storeFood else ""
+	fill.Color = if food == "Fish"
+		then Color3.fromRGB(120, 170, 210)
+		elseif food == "Meat" then Color3.fromRGB(190, 80, 80)
+		elseif food == "Melon" then Color3.fromRGB(90, 160, 70)
+		elseif food == "Carrot" then Color3.fromRGB(240, 140, 40)
+		else Color3.fromRGB(200, 180, 60)
+end
+
+local function refreshPenVisual(zoo: Zoo, pen: Pen)
 	local world = pen.world
 	if not pen.unlocked then
 		world.floor.Color = LOCKED_FLOOR
@@ -1361,11 +2149,13 @@ local function refreshPenVisual(pen: Pen)
 		return
 	end
 
+	local capacity = storeCapacity(zoo)
+	setTroughFill(pen, pen.storeAmount / capacity)
+
 	local species = penSpecies(pen)
 	if not species then
 		world.floor.Color = EMPTY_FLOOR
 		world.floor.Material = Enum.Material.Grass
-		world.troughFill.Transparency = 1
 		world.statusLabel.Text = "Empty pen — buy an animal!"
 		return
 	end
@@ -1373,19 +2163,28 @@ local function refreshPenVisual(pen: Pen)
 	world.floor.Color = species.habitat
 	world.floor.Material = species.habitatMaterial
 
-	local hungry = 0
-	local totalHunger = 0
+	local starving, hungry = 0, 0
 	for _, animal in pen.animals do
-		totalHunger += animal.hunger
 		if animal.hunger <= 0 then
+			starving += 1
+		elseif animal.hunger <= Config.EatThreshold then
 			hungry += 1
 		end
 	end
-	world.troughFill.Transparency = if totalHunger > 0 then 0 else 1
 
-	local text = string.format("%s ×%d", species.name, #pen.animals)
-	if hungry > 0 then
-		text ..= "  🍖 Hungry!"
+	local food = Config.FoodById[species.food]
+	local text = string.format(
+		"%s ×%d  %s %d/%d",
+		species.name,
+		#pen.animals,
+		food.emoji,
+		math.floor(pen.storeAmount),
+		capacity
+	)
+	if starving > 0 then
+		text ..= "  ⚠️ Starving!"
+	elseif hungry > 0 and pen.storeAmount < 1 then
+		text ..= "  🍽️ Needs food"
 	end
 	world.statusLabel.Text = text
 end
@@ -1414,9 +2213,18 @@ local function updateMarker(animal: Animal)
 	local marker = animal.marker
 	marker:SetAttribute("Stage", animal.stage)
 	marker:SetAttribute("Hungry", animal.hunger <= 0)
+	-- Rounded so the attribute only replicates when it visibly changes.
+	marker:SetAttribute("Health", math.ceil(animal.health / Config.HealthMax * 20) / 20)
 end
 
-local function spawnAnimal(pen: Pen, speciesId: string, growth: number, hunger: number, near: Vector3?): Animal
+local function spawnAnimal(
+	pen: Pen,
+	speciesId: string,
+	growth: number,
+	hunger: number,
+	health: number,
+	near: Vector3?
+): Animal
 	local species = Config.SpeciesById[speciesId]
 	local position = near or randomPointInPen(pen, species)
 
@@ -1427,10 +2235,12 @@ local function spawnAnimal(pen: Pen, speciesId: string, growth: number, hunger: 
 		species = species,
 		growth = growth,
 		hunger = hunger,
+		health = health,
 		stage = Config.getStage(species, growth),
 		marker = marker,
 		position = position,
 		nextMoveAt = os.clock() + math.random() * 3,
+		warnedStarving = false,
 	}
 	marker:SetAttribute("Species", species.id)
 	marker:SetAttribute("Target", position)
@@ -1490,37 +2300,85 @@ local function discover(zoo: Zoo, species: Species)
 	end
 end
 
+-- Animals eat from the pen's food store when they get hungry.
+local function eat(pen: Pen, animal: Animal)
+	if animal.hunger > Config.EatThreshold or pen.storeAmount <= 0 then
+		return
+	end
+	if pen.storeFood ~= animal.species.food then
+		return
+	end
+	local meal = animal.species.mealSize
+	local eaten = math.min(meal, pen.storeAmount)
+	pen.storeAmount -= eaten
+	if pen.storeAmount < 0.001 then
+		pen.storeAmount = 0
+	end
+	animal.hunger = math.min(Config.HungerMax, animal.hunger + Config.HungerMax * eaten / meal)
+end
+
 local function tickZoo(zoo: Zoo, dt: number, now: number)
 	local income = 0
 	for _, pen in zoo.pens do
 		local adults = 0
 		local totalHunger = 0
+		local dead: { Animal } = {}
+
 		for _, animal in pen.animals do
 			local species = animal.species
+			local wasHungry = animal.hunger <= 0
+			local oldHealthKey = math.ceil(animal.health / Config.HealthMax * 20)
+
+			animal.hunger = math.max(0, animal.hunger - Config.HungerDrainPerSecond * dt)
+			eat(pen, animal)
+
 			if animal.hunger > 0 then
+				-- Fed: grow, earn and heal.
 				if animal.growth < species.growTime then
 					local rate = if animal.hunger >= Config.WellFedThreshold then 1 else 0.5
 					animal.growth = math.min(species.growTime, animal.growth + dt * rate)
 				else
 					income += species.income * dt
 				end
+				animal.health = math.min(Config.HealthMax, animal.health + Config.HealthRegenPerSecond * dt)
+				if animal.health >= Config.HealthMax * 0.75 then
+					animal.warnedStarving = false
+				end
+			else
+				-- Starving: lose health.
+				animal.health = math.max(0, animal.health - Config.StarveDamagePerSecond * dt)
+				if not animal.warnedStarving and animal.health <= Config.HealthMax * 0.5 then
+					animal.warnedStarving = true
+					notify(
+						zoo.player,
+						string.format("⚠️ Your %s in pen %d is starving! Bring it food fast!", species.name, pen.index),
+						"error"
+					)
+				end
 			end
 
-			local wasHungry = animal.hunger <= 0
-			animal.hunger = math.max(0, animal.hunger - Config.HungerDrainPerSecond * dt)
+			if animal.health <= 0 then
+				table.insert(dead, animal)
+				continue
+			end
 			totalHunger += animal.hunger
 
+			local isHungry = animal.hunger <= 0
 			local stage = Config.getStage(species, animal.growth)
-			if stage ~= animal.stage then
+			local healthKey = math.ceil(animal.health / Config.HealthMax * 20)
+			if stage ~= animal.stage or wasHungry ~= isHungry or healthKey ~= oldHealthKey then
+				local grewUp = stage ~= animal.stage and stage == "Adult"
 				animal.stage = stage
 				updateMarker(animal)
-				if stage == "Adult" then
+				if grewUp then
 					discover(zoo, species)
 				end
-			elseif wasHungry ~= (animal.hunger <= 0) then
-				updateMarker(animal)
-				if animal.hunger <= 0 then
-					notify(zoo.player, string.format("🍖 Your %s in pen %d is hungry!", species.name, pen.index), "warning")
+				if isHungry and not wasHungry then
+					notify(
+						zoo.player,
+						string.format("🍽️ Your %s in pen %d is out of food!", species.name, pen.index),
+						"warning"
+					)
 				end
 			end
 
@@ -1528,6 +2386,15 @@ local function tickZoo(zoo: Zoo, dt: number, now: number)
 				adults += 1
 			end
 			wander(pen, animal, now)
+		end
+
+		for _, animal in dead do
+			removeAnimal(pen, animal)
+			notify(
+				zoo.player,
+				string.format("💀 Your %s in pen %d starved to death.", animal.species.name, pen.index),
+				"error"
+			)
 		end
 
 		-- Breeding: two well-fed adults and a free spot can produce a baby.
@@ -1543,11 +2410,11 @@ local function tickZoo(zoo: Zoo, dt: number, now: number)
 		then
 			pen.breedCooldown = Config.BreedCooldown
 			local parent = pen.animals[math.random(1, #pen.animals)]
-			spawnAnimal(pen, species.id, 0, Config.HungerMax, parent.position)
+			spawnAnimal(pen, species.id, 0, Config.HungerMax, Config.HealthMax, parent.position)
 			notify(zoo.player, string.format("🍼 A baby %s was born in pen %d!", species.name, pen.index), "success")
 		end
 
-		refreshPenVisual(pen)
+		refreshPenVisual(zoo, pen)
 	end
 	zoo.coins += income
 end
@@ -1572,25 +2439,13 @@ local function spend(zoo: Zoo, amount: number): boolean
 	return true
 end
 
-local function feedCost(pen: Pen): number
-	local cost = 0
-	for _, animal in pen.animals do
-		if animal.hunger < Config.HungerMax - 1 then
-			cost += animal.species.feedCost
-		end
+local function isNearPen(zoo: Zoo, pen: Pen): boolean
+	local character = zoo.player.Character
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	if not root or not root:IsA("BasePart") then
+		return false
 	end
-	return cost
-end
-
-local function feedPen(pen: Pen)
-	for _, animal in pen.animals do
-		local wasHungry = animal.hunger <= 0
-		animal.hunger = Config.HungerMax
-		if wasHungry then
-			updateMarker(animal)
-		end
-	end
-	refreshPenVisual(pen)
+	return (root.Position - pen.world.sign.Position).Magnitude <= Config.StockDistance
 end
 
 local actions: { [string]: (zoo: Zoo, ...any) -> () } = {}
@@ -1602,14 +2457,14 @@ function actions.UnlockPen(zoo: Zoo, penIndex: any)
 	end
 	if spend(zoo, Config.getPenPrice(pen.index)) then
 		pen.unlocked = true
-		refreshPenVisual(pen)
+		refreshPenVisual(zoo, pen)
 		notify(zoo.player, string.format("🔓 Pen %d unlocked!", pen.index), "success")
 	end
 end
 
 function actions.BuyAnimal(zoo: Zoo, penIndex: any, speciesId: any)
 	local pen = getPen(zoo, penIndex)
-	local species = type(speciesId) == "string" and Config.SpeciesById[speciesId] or nil
+	local species = if type(speciesId) == "string" then Config.SpeciesById[speciesId] else nil
 	if not pen or not species or not pen.unlocked then
 		return
 	end
@@ -1623,50 +2478,69 @@ function actions.BuyAnimal(zoo: Zoo, penIndex: any, speciesId: any)
 		return
 	end
 	if spend(zoo, species.price) then
-		spawnAnimal(pen, species.id, 0, Config.HungerMax)
-		refreshPenVisual(pen)
-		notify(zoo.player, string.format("🐾 A baby %s joined pen %d!", species.name, pen.index), "success")
-	end
-end
-
-function actions.FeedPen(zoo: Zoo, penIndex: any)
-	local pen = getPen(zoo, penIndex)
-	if not pen or #pen.animals == 0 then
-		return
-	end
-	local cost = feedCost(pen)
-	if cost == 0 then
-		notify(zoo.player, "They're already full!", "info")
-		return
-	end
-	if spend(zoo, cost) then
-		feedPen(pen)
-		notify(zoo.player, string.format("🥕 Fed pen %d for %s coins.", pen.index, formatNumber(cost)), "success")
-	end
-end
-
-function actions.FeedAll(zoo: Zoo)
-	local fed, spent, skipped = 0, 0, 0
-	for _, pen in zoo.pens do
-		local cost = feedCost(pen)
-		if cost > 0 then
-			if zoo.coins >= cost then
-				zoo.coins -= cost
-				spent += cost
-				fed += 1
-				feedPen(pen)
-			else
-				skipped += 1
+		if pen.storeFood ~= species.food then
+			if pen.storeFood and pen.storeAmount >= 1 then
+				local old = Config.FoodById[pen.storeFood]
+				notify(zoo.player, string.format("The old %s in this pen's store went to waste.", old.name), "warning")
 			end
+			pen.storeFood = species.food
+			pen.storeAmount = 0
 		end
+		spawnAnimal(pen, species.id, 0, Config.HungerMax, Config.HealthMax)
+		refreshPenVisual(zoo, pen)
+		local food = Config.FoodById[species.food]
+		notify(
+			zoo.player,
+			string.format("🐾 A baby %s joined pen %d! It eats %s %s.", species.name, pen.index, food.emoji, food.name),
+			"success"
+		)
 	end
-	if fed == 0 and skipped == 0 then
-		notify(zoo.player, "Everyone is already full!", "info")
-	elseif skipped > 0 then
-		notify(zoo.player, string.format("Fed %d pens. Not enough coins for %d more.", fed, skipped), "warning")
+end
+
+function actions.StockPen(zoo: Zoo, penIndex: any)
+	local pen = getPen(zoo, penIndex)
+	if not pen or not pen.unlocked then
+		return
+	end
+	local species = penSpecies(pen)
+	if not species then
+		notify(zoo.player, "Buy an animal first so you know what food to store.", "info")
+		return
+	end
+	if not isNearPen(zoo, pen) then
+		notify(zoo.player, "Walk up to the pen's sign to fill its food store.", "error")
+		return
+	end
+	local food = Config.FoodById[species.food]
+	local have = zoo.inventory[food.id] or 0
+	if have <= 0 then
+		notify(
+			zoo.player,
+			string.format(
+				"You have no %s %s. Forage it in the %s!",
+				food.emoji,
+				food.name,
+				Config.Rings[food.ring].name
+			),
+			"error"
+		)
+		return
+	end
+	pen.storeFood = food.id
+	local space = math.floor(storeCapacity(zoo) - pen.storeAmount)
+	if space <= 0 then
+		notify(zoo.player, "This pen's food store is full!", "info")
+		return
+	end
+	local amount = math.min(have, space)
+	pen.storeAmount += amount
+	if have - amount > 0 then
+		zoo.inventory[food.id] = have - amount
 	else
-		notify(zoo.player, string.format("🥕 Fed %d pens for %s coins.", fed, formatNumber(spent)), "success")
+		zoo.inventory[food.id] = nil
 	end
+	refreshPenVisual(zoo, pen)
+	notify(zoo.player, string.format("Stored %d %s %s in pen %d.", amount, food.emoji, food.name, pen.index), "success")
 end
 
 function actions.SellAnimal(zoo: Zoo, penIndex: any, animalId: any)
@@ -1679,7 +2553,7 @@ function actions.SellAnimal(zoo: Zoo, penIndex: any, animalId: any)
 			local price = Config.getSellPrice(animal.species, animal.growth)
 			zoo.coins += price
 			removeAnimal(pen, animal)
-			refreshPenVisual(pen)
+			refreshPenVisual(zoo, pen)
 			notify(
 				zoo.player,
 				string.format("💰 Sold a %s for %s coins.", animal.species.name, formatNumber(price)),
@@ -1687,6 +2561,17 @@ function actions.SellAnimal(zoo: Zoo, penIndex: any, animalId: any)
 			)
 			return
 		end
+	end
+end
+
+function actions.DropFood(zoo: Zoo, foodId: any)
+	if type(foodId) ~= "string" or not zoo.inventory[foodId] then
+		return
+	end
+	zoo.inventory[foodId] = nil
+	local food = Config.FoodById[foodId]
+	if food then
+		notify(zoo.player, string.format("Dropped your %s %s.", food.emoji, food.name), "info")
 	end
 end
 
@@ -1752,6 +2637,8 @@ local function onPlayerAdded(player: Player)
 			unlocked = false,
 			animals = {},
 			breedCooldown = 0,
+			storeFood = nil,
+			storeAmount = 0,
 			world = worldPen,
 		})
 		worldPen.prompt:SetAttribute("OwnerUserId", player.UserId)
@@ -1763,6 +2650,8 @@ local function onPlayerAdded(player: Player)
 		coins = 0,
 		pens = pens,
 		discovered = {},
+		inventory = {},
+		equipment = {},
 		canSave = false,
 		loaded = false,
 		lastActionAt = 0,
@@ -1786,15 +2675,25 @@ local function onPlayerAdded(player: Player)
 
 	zoo.coins = data.coins
 	zoo.discovered = data.discovered
+	zoo.inventory = data.inventory
+	zoo.equipment = data.equipment
 	zoo.canSave = canSave
 	for i, savedPen in data.pens do
 		local pen = pens[i]
 		if pen then
 			pen.unlocked = savedPen.unlocked
+			pen.storeFood = savedPen.storeFood
+			pen.storeAmount = savedPen.storeAmount
 			for _, saved in savedPen.animals do
-				spawnAnimal(pen, saved.species, saved.growth, saved.hunger)
+				spawnAnimal(pen, saved.species, saved.growth, saved.hunger, saved.health)
 			end
-			refreshPenVisual(pen)
+			-- Older saves have no store yet: match it to the animals.
+			local species = penSpecies(pen)
+			if species and pen.storeFood ~= species.food then
+				pen.storeFood = species.food
+				pen.storeAmount = 0
+			end
+			refreshPenVisual(zoo, pen)
 		end
 	end
 	zoo.loaded = true
@@ -1826,7 +2725,7 @@ end
 ---------------------------------------------------------------------------
 
 local function createRemotes()
-	remotes = Instance.new("Folder")
+	local remotes = Instance.new("Folder")
 	remotes.Name = "Remotes"
 	local function remote(name: string): RemoteEvent
 		local event = Instance.new("RemoteEvent")
@@ -1863,6 +2762,28 @@ function ZooService.start()
 			end)
 		end
 	end
+
+	-- Foraging and chests live in their own module and talk to zoos through this.
+	ForageService.start({
+		getZoo = function(player: Player): any
+			local zoo = zoos[player]
+			return if zoo and zoo.loaded then zoo else nil
+		end,
+		carried = function(zoo: any): number
+			return carried(zoo)
+		end,
+		capacity = function(zoo: any): number
+			return backpackCapacity(zoo)
+		end,
+		changed = function(zoo: any)
+			-- Pantry upgrades change every pen's store size.
+			for _, pen in (zoo :: Zoo).pens do
+				refreshPenVisual(zoo, pen)
+			end
+			pushState(zoo)
+		end,
+		notify = notify,
+	})
 
 	actionEvent.OnServerEvent:Connect(function(player, actionName, ...)
 		local zoo = zoos[player]
@@ -1937,19 +2858,19 @@ return ZooService
       </Item>
     </Item>
   </Item>
-  <Item class="StarterPlayer" referent="11">
+  <Item class="StarterPlayer" referent="12">
     <Properties>
       <string name="Name">StarterPlayer</string>
     </Properties>
-    <Item class="StarterPlayerScripts" referent="12">
+    <Item class="StarterPlayerScripts" referent="13">
       <Properties>
         <string name="Name">StarterPlayerScripts</string>
       </Properties>
-      <Item class="Folder" referent="13">
+      <Item class="Folder" referent="14">
         <Properties>
           <string name="Name">Client</string>
         </Properties>
-        <Item class="LocalScript" referent="14">
+        <Item class="LocalScript" referent="15">
           <Properties>
             <string name="Name">AnimalAnimator</string>
             <string name="Source"><![CDATA[--!strict
@@ -2017,19 +2938,32 @@ local function onMarkerAdded(marker: Instance)
 	local yaw = math.random() * math.pi * 2
 	model:PivotTo(CFrame.new(position) * CFrame.Angles(0, yaw, 0))
 
-	-- Hunger bubble shown above hungry animals.
+	-- Bubble above starving or hurt animals: a food icon and a health bar.
 	local hungerGui = Instance.new("BillboardGui")
 	hungerGui.Name = "HungerBubble"
-	hungerGui.Size = UDim2.fromOffset(40, 40)
+	hungerGui.Size = UDim2.fromOffset(60, 52)
 	hungerGui.MaxDistance = 80
 	hungerGui.Adornee = model:FindFirstChild("Body") :: BasePart
-	hungerGui.Enabled = marker:GetAttribute("Hungry") == true
 	local label = Instance.new("TextLabel")
-	label.Size = UDim2.fromScale(1, 1)
+	label.Name = "Icon"
+	label.Size = UDim2.new(1, 0, 0, 36)
 	label.BackgroundTransparency = 1
 	label.TextScaled = true
 	label.Text = "🍖"
 	label.Parent = hungerGui
+	local barBack = Instance.new("Frame")
+	barBack.Name = "HealthBar"
+	barBack.Position = UDim2.fromOffset(4, 40)
+	barBack.Size = UDim2.new(1, -8, 0, 8)
+	barBack.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+	barBack.BorderSizePixel = 0
+	barBack.Parent = hungerGui
+	local barFill = Instance.new("Frame")
+	barFill.Name = "Fill"
+	barFill.Size = UDim2.fromScale(1, 1)
+	barFill.BackgroundColor3 = Color3.fromRGB(220, 60, 60)
+	barFill.BorderSizePixel = 0
+	barFill.Parent = barBack
 	hungerGui.Parent = model
 
 	model.Parent = folder
@@ -2047,6 +2981,15 @@ local function onMarkerAdded(marker: Instance)
 	tracked[marker] = entry
 	applyStage(entry, (marker:GetAttribute("Stage") :: string?) or "Baby")
 
+	local function updateBubble()
+		local hungry = marker:GetAttribute("Hungry") == true
+		local health = (marker:GetAttribute("Health") :: number?) or 1
+		hungerGui.Enabled = hungry or health < 1
+		label.Text = if hungry then "🍖" else "❤️"
+		barFill.Size = UDim2.fromScale(math.clamp(health, 0, 1), 1)
+	end
+	updateBubble()
+
 	table.insert(
 		entry.connections,
 		marker:GetAttributeChangedSignal("Stage"):Connect(function()
@@ -2059,9 +3002,10 @@ local function onMarkerAdded(marker: Instance)
 	table.insert(
 		entry.connections,
 		marker:GetAttributeChangedSignal("Hungry"):Connect(function()
-			entry.hungerGui.Enabled = marker:GetAttribute("Hungry") == true
+			updateBubble()
 		end)
 	)
+	table.insert(entry.connections, marker:GetAttributeChangedSignal("Health"):Connect(updateBubble))
 end
 
 local function onMarkerRemoved(marker: Instance)
@@ -2125,7 +3069,7 @@ end
 ]]></string>
           </Properties>
         </Item>
-        <Item class="LocalScript" referent="15">
+        <Item class="LocalScript" referent="16">
           <Properties>
             <string name="Name">ZooUI</string>
             <string name="Source"><![CDATA[--!strict
@@ -2294,7 +3238,7 @@ local hud = create("Frame", {
 	Name = "HUD",
 	BackgroundColor3 = PANEL,
 	Position = UDim2.fromOffset(12, 12),
-	Size = UDim2.fromOffset(230, 140),
+	Size = UDim2.fromOffset(230, 184),
 	Parent = screen,
 }, { corner(12), padding(8) })
 
@@ -2312,25 +3256,48 @@ local ratingLabel = label({
 	Parent = hud,
 })
 
+local backpackLabel = label({
+	Text = "🎒 0/15",
+	Position = UDim2.fromOffset(0, 54),
+	Size = UDim2.new(1, 0, 0, 22),
+	MaxTextSize = 20,
+	Parent = hud,
+})
+local carryingLabel = label({
+	Text = "Empty — go forage!",
+	Position = UDim2.fromOffset(0, 78),
+	Size = UDim2.new(1, 0, 0, 20),
+	MaxTextSize = 16,
+	TextColor3 = Color3.fromRGB(110, 90, 70),
+	Parent = hud,
+})
+
 local zooBookPanel: Frame
 local renderZooBook: () -> ()
+local gearPanel: Frame
+local renderGear: (force: boolean) -> ()
 
 local bookButton = button("📖 Zoo Book", BLUE, function()
 	zooBookPanel.Visible = not zooBookPanel.Visible
 	if zooBookPanel.Visible then
+		gearPanel.Visible = false
 		renderZooBook()
 	end
 end)
-bookButton.Position = UDim2.fromOffset(0, 58)
+bookButton.Position = UDim2.fromOffset(0, 102)
 bookButton.Size = UDim2.new(1, 0, 0, 30)
 bookButton.Parent = hud
 
-local feedAllButton = button("🥕 Feed all pens", ORANGE, function()
-	actionEvent:FireServer("FeedAll")
+local gearButton = button("🧰 Gear & Foraging", ORANGE, function()
+	gearPanel.Visible = not gearPanel.Visible
+	if gearPanel.Visible then
+		zooBookPanel.Visible = false
+		renderGear(true)
+	end
 end)
-feedAllButton.Position = UDim2.fromOffset(0, 92)
-feedAllButton.Size = UDim2.new(1, 0, 0, 30)
-feedAllButton.Parent = hud
+gearButton.Position = UDim2.fromOffset(0, 136)
+gearButton.Size = UDim2.new(1, 0, 0, 30)
+gearButton.Parent = hud
 
 ---------------------------------------------------------------------------
 -- Notifications
@@ -2409,6 +3376,7 @@ type AnimalState = {
 	stage: string,
 	growth: number,
 	hunger: number,
+	health: number,
 	sellPrice: number,
 }
 type PenState = {
@@ -2416,11 +3384,18 @@ type PenState = {
 	price: number,
 	species: string?,
 	animals: { AnimalState },
+	storeFood: string?,
+	storeAmount: number,
+	storeCapacity: number,
 }
 type State = {
 	coins: number,
 	rating: number,
 	discovered: { [string]: boolean },
+	inventory: { [string]: number },
+	carried: number,
+	capacity: number,
+	equipment: { [string]: number },
 	pens: { PenState },
 }
 
@@ -2489,16 +3464,6 @@ local function addToBody(instance: GuiObject, order: number)
 	instance.Parent = penBody
 end
 
-local function penFeedCost(pen: PenState): number
-	local cost = 0
-	for _, animal in pen.animals do
-		if animal.hunger < 0.99 then
-			cost += Config.SpeciesById[animal.species].feedCost
-		end
-	end
-	return cost
-end
-
 local function buildSpeciesCard(penIndex: number, species: Config.Species, coins: number): Frame
 	local affordable = coins >= species.price
 	local card = create("Frame", {
@@ -2512,7 +3477,8 @@ local function buildSpeciesCard(penIndex: number, species: Config.Species, coins
 	})
 	label({
 		Text = string.format(
-			"Adult earns %s/s • grows in %ds",
+			"Eats %s • earns %s/s • grows %ds",
+			Config.FoodById[species.food].emoji,
 			formatNumber(species.income),
 			species.growTime
 		),
@@ -2536,7 +3502,7 @@ local function buildAnimalRow(penIndex: number, animal: AnimalState): Frame
 	local species = Config.SpeciesById[animal.species]
 	local row = create("Frame", {
 		BackgroundColor3 = PANEL_DARK,
-		Size = UDim2.new(1, -8, 0, 78),
+		Size = UDim2.new(1, -8, 0, 100),
 	}, { corner(10), padding(6) })
 	label({
 		Name = "Title",
@@ -2554,6 +3520,11 @@ local function buildAnimalRow(penIndex: number, animal: AnimalState): Frame
 	hungerBar.Position = UDim2.fromOffset(0, 48)
 	hungerBar.Size = UDim2.new(0.62, 0, 0, 18)
 	hungerBar.Parent = row
+	local healthBar = bar(1, RED, "")
+	healthBar.Name = "Health"
+	healthBar.Position = UDim2.fromOffset(0, 70)
+	healthBar.Size = UDim2.new(0.62, 0, 0, 18)
+	healthBar.Parent = row
 
 	local sell = button("Sell", RED, function()
 		actionEvent:FireServer("SellAnimal", penIndex, animal.id)
@@ -2571,8 +3542,15 @@ local function updateAnimalRow(row: Frame, animal: AnimalState)
 		then "Fully grown!"
 		else string.format("Growing %d%%", math.floor(animal.growth * 100))
 	setBar(row:FindFirstChild("Growth") :: Frame, animal.growth, growthText)
-	local hungerText = if animal.hunger <= 0 then "Hungry!" else string.format("Food %d%%", math.ceil(animal.hunger * 100))
+	local hungerText = if animal.hunger <= 0
+		then "Starving!"
+		else string.format("Full %d%%", math.ceil(animal.hunger * 100))
 	setBar(row:FindFirstChild("Hunger") :: Frame, animal.hunger, hungerText)
+	setBar(
+		row:FindFirstChild("Health") :: Frame,
+		animal.health,
+		string.format("Health %d%%", math.ceil(animal.health * 100))
+	)
 	local sell = row:FindFirstChild("Sell") :: TextButton
 	sell.Text = "Sell 🪙" .. formatNumber(animal.sellPrice)
 	local title = row:FindFirstChild("Title") :: TextLabel
@@ -2634,7 +3612,7 @@ local function renderPen()
 		elseif #pen.animals == 0 then
 			addToBody(
 				label({
-					Text = "Pick a baby animal to raise. Feed it so it grows into an adult that earns coins from visitors!",
+					Text = "Pick a baby animal to raise. Keep its food store stocked so it grows into an adult that earns coins!",
 					Size = UDim2.new(1, -8, 0, 54),
 					TextWrapped = true,
 					MaxTextSize = 15,
@@ -2651,12 +3629,17 @@ local function renderPen()
 				addToBody(row, i)
 			end
 
-			local feed = button("🥕 Feed", ORANGE, function()
-				actionEvent:FireServer("FeedPen", penIndex)
+			local storeBar = bar(0, ORANGE, "")
+			storeBar.Name = "Store"
+			storeBar.Size = UDim2.new(1, -8, 0, 24)
+			addToBody(storeBar, 99)
+
+			local stock = button("", ORANGE, function()
+				actionEvent:FireServer("StockPen", penIndex)
 			end)
-			feed.Size = UDim2.new(1, -8, 0, 44)
-			addToBody(feed, 100)
-			footerButtons.feed = feed
+			stock.Size = UDim2.new(1, -8, 0, 44)
+			addToBody(stock, 100)
+			footerButtons.stock = stock
 
 			if species and #pen.animals < Config.PenCapacity then
 				local buyMore = button("", GREEN, function()
@@ -2688,9 +3671,21 @@ local function renderPen()
 			updateAnimalRow(row, animal)
 		end
 	end
-	if footerButtons.feed then
-		local cost = penFeedCost(pen)
-		footerButtons.feed.Text = if cost > 0 then "🥕 Feed for 🪙 " .. formatNumber(cost) else "🥕 Everyone is full"
+	local food = if species then Config.FoodById[species.food] else nil
+	local storeBar = penBody:FindFirstChild("Store")
+	if storeBar and food then
+		setBar(
+			storeBar,
+			pen.storeAmount / math.max(1, pen.storeCapacity),
+			string.format("%s %s store: %d / %d", food.emoji, food.name, pen.storeAmount, pen.storeCapacity)
+		)
+	end
+	if footerButtons.stock and food then
+		local have = currentState.inventory[food.id] or 0
+		footerButtons.stock.Text = if have > 0
+			then string.format("Fill store from backpack (%s %d)", food.emoji, have)
+			else string.format("No %s %s — forage in the %s", food.emoji, food.name, Config.Rings[food.ring].name)
+		footerButtons.stock.BackgroundColor3 = if have > 0 then ORANGE else GREY
 	end
 	if footerButtons.buyMore and species then
 		footerButtons.buyMore.Text = string.format("Buy another %s 🪙 %s", species.name, formatNumber(species.price))
@@ -2703,12 +3698,20 @@ local function renderPen()
 				adults += 1
 			end
 		end
-		if #pen.animals >= Config.PenCapacity then
+		local starving = false
+		for _, animal in pen.animals do
+			if animal.hunger <= 0 then
+				starving = true
+			end
+		end
+		if starving then
+			tip.Text = "⚠️ Starving animals lose health and die at 0. Fill the food store!"
+		elseif #pen.animals >= Config.PenCapacity then
 			tip.Text = "This pen is full. Sell an animal to make room."
 		elseif adults >= 2 then
 			tip.Text = "💕 Two well-fed adults may have a baby soon!"
 		else
-			tip.Text = "Tip: two well-fed adults in a pen can have babies."
+			tip.Text = "Animals eat from the store by themselves. Two well-fed adults can have babies."
 		end
 	end
 end
@@ -2821,6 +3824,221 @@ renderZooBook = function()
 end
 
 ---------------------------------------------------------------------------
+-- Gear & Foraging
+---------------------------------------------------------------------------
+
+gearPanel = create("Frame", {
+	Name = "Gear",
+	BackgroundColor3 = PANEL,
+	AnchorPoint = Vector2.new(0.5, 0.5),
+	Position = UDim2.fromScale(0.5, 0.5),
+	Size = UDim2.fromOffset(460, 420),
+	Visible = false,
+	Parent = screen,
+}, { corner(14), padding(12) })
+
+label({
+	Text = "🧰 Gear & Foraging",
+	Size = UDim2.new(1, -40, 0, 32),
+	MaxTextSize = 26,
+	Parent = gearPanel,
+})
+local closeGear = button("✕", RED, function()
+	gearPanel.Visible = false
+end)
+closeGear.AnchorPoint = Vector2.new(1, 0)
+closeGear.Position = UDim2.new(1, 0, 0, 0)
+closeGear.Size = UDim2.fromOffset(36, 36)
+closeGear.Parent = gearPanel
+
+local gearBody = create("ScrollingFrame", {
+	BackgroundTransparency = 1,
+	BorderSizePixel = 0,
+	Position = UDim2.fromOffset(0, 44),
+	Size = UDim2.new(1, 0, 1, -44),
+	CanvasSize = UDim2.new(),
+	AutomaticCanvasSize = Enum.AutomaticSize.Y,
+	ScrollBarThickness = 6,
+	ScrollBarImageColor3 = GREY,
+	Parent = gearPanel,
+}, {
+	create("UIListLayout", {
+		SortOrder = Enum.SortOrder.LayoutOrder,
+		Padding = UDim.new(0, 6),
+	}),
+})
+
+local gearSignature = ""
+
+local function equipmentEffect(item: Config.Equipment, level: number): string
+	local value = Config.getEquipmentValue(item.id, level)
+	if item.id == "Gloves" then
+		return string.format("Foraging takes %d%% of the time", math.floor(value * 100 + 0.5))
+	elseif item.id == "Backpack" then
+		return string.format("Carry up to %d food", value)
+	end
+	return string.format("Each pen stores up to %d food", value)
+end
+
+renderGear = function(force: boolean)
+	if not gearPanel.Visible then
+		return
+	end
+	local current = state
+	local equipment = if current then current.equipment else {}
+	local inventory = if current then current.inventory else {}
+
+	local parts = {}
+	for _, item in Config.Equipment do
+		table.insert(parts, tostring(equipment[item.id] or 0))
+	end
+	for _, food in Config.Foods do
+		table.insert(parts, tostring(inventory[food.id] or 0))
+	end
+	local signature = table.concat(parts, "|")
+	if not force and signature == gearSignature then
+		return
+	end
+	gearSignature = signature
+
+	for _, child in gearBody:GetChildren() do
+		if not child:IsA("UIListLayout") then
+			child:Destroy()
+		end
+	end
+	local order = 0
+	local function add(instance: GuiObject)
+		order += 1
+		instance.LayoutOrder = order
+		instance.Parent = gearBody
+	end
+	local function heading(text: string)
+		add(label({ Text = text, Size = UDim2.new(1, -8, 0, 26), MaxTextSize = 20 }))
+	end
+	local function note(text: string)
+		add(label({
+			Text = text,
+			Size = UDim2.new(1, -8, 0, 34),
+			TextWrapped = true,
+			MaxTextSize = 14,
+			TextColor3 = Color3.fromRGB(110, 90, 70),
+		}))
+	end
+
+	heading("Equipment")
+	for _, item in Config.Equipment do
+		local level = equipment[item.id] or 0
+		add(create("Frame", {
+			BackgroundColor3 = PANEL_DARK,
+			Size = UDim2.new(1, -8, 0, 52),
+		}, {
+			corner(10),
+			padding(6),
+			label({
+				Text = string.format("%s %s  (%d/%d)", item.emoji, item.tierNames[level + 1], level, Config.MaxEquipmentLevel),
+				Size = UDim2.new(1, 0, 0, 20),
+				MaxTextSize = 18,
+			}),
+			label({
+				Text = equipmentEffect(item, level),
+				Position = UDim2.fromOffset(0, 22),
+				Size = UDim2.new(1, 0, 0, 18),
+				MaxTextSize = 14,
+				TextColor3 = Color3.fromRGB(110, 90, 70),
+			}),
+		}))
+	end
+	note("🎁 Open treasure chests in the wild to upgrade your gear. The further out the chest, the better the gear inside.")
+
+	heading(string.format("🎒 Backpack  %d/%d", if current then current.carried else 0, if current then current.capacity else 0))
+	local carryingAny = false
+	for _, food in Config.Foods do
+		local amount = inventory[food.id] or 0
+		if amount > 0 then
+			carryingAny = true
+			local row = create("Frame", {
+				BackgroundColor3 = PANEL_DARK,
+				Size = UDim2.new(1, -8, 0, 44),
+			}, {
+				corner(10),
+				padding(6),
+				label({
+					Text = string.format("%s %s × %d", food.emoji, food.name, amount),
+					Size = UDim2.new(0.65, 0, 1, 0),
+					MaxTextSize = 18,
+				}),
+			})
+			local drop = button("Drop", RED, function()
+				actionEvent:FireServer("DropFood", food.id)
+			end)
+			drop.AnchorPoint = Vector2.new(1, 0.5)
+			drop.Position = UDim2.new(1, 0, 0.5, 0)
+			drop.Size = UDim2.new(0.3, 0, 1, 0)
+			drop.Parent = row
+			add(row)
+		end
+	end
+	if not carryingAny then
+		note("Your backpack is empty. Head out into the wild and forage!")
+	end
+
+	heading("Where to find food")
+	for _, food in Config.Foods do
+		local ring = Config.Rings[food.ring]
+		local eaters = {}
+		for _, species in Config.Species do
+			if species.food == food.id then
+				table.insert(eaters, species.name)
+			end
+		end
+		add(create("Frame", {
+			BackgroundColor3 = PANEL_DARK,
+			Size = UDim2.new(1, -8, 0, 50),
+		}, {
+			corner(10),
+			padding(6),
+			label({
+				Text = string.format("%s %s — %s", food.emoji, food.name, ring.name),
+				Size = UDim2.new(1, 0, 0, 20),
+				MaxTextSize = 18,
+			}),
+			label({
+				Text = string.format(
+					"%d–%d studs from the zoo • fed to %s",
+					ring.inner,
+					ring.outer,
+					table.concat(eaters, ", ")
+				),
+				Position = UDim2.fromOffset(0, 22),
+				Size = UDim2.new(1, 0, 0, 16),
+				MaxTextSize = 13,
+				TextColor3 = Color3.fromRGB(110, 90, 70),
+			}),
+		}))
+	end
+end
+
+---------------------------------------------------------------------------
+-- Foraging prompts: hold time depends on the player's gloves
+---------------------------------------------------------------------------
+
+local glovesMultiplier = 1
+
+local function updateForagePrompt(prompt: Instance)
+	if prompt:IsA("ProximityPrompt") then
+		local baseTime = prompt:GetAttribute("BaseTime")
+		if type(baseTime) == "number" then
+			prompt.HoldDuration = baseTime * glovesMultiplier
+		end
+	end
+end
+
+CollectionService:GetInstanceAddedSignal("ForagePrompt"):Connect(updateForagePrompt)
+for _, prompt in CollectionService:GetTagged("ForagePrompt") do
+	updateForagePrompt(prompt)
+end
+
+---------------------------------------------------------------------------
 -- State updates
 ---------------------------------------------------------------------------
 
@@ -2844,6 +4062,27 @@ stateUpdate.OnClientEvent:Connect(function(newState: State)
 	if penPanel.Visible then
 		renderPen()
 	end
+
+	backpackLabel.Text = string.format("🎒 %d/%d", newState.carried, newState.capacity)
+	local carrying = {}
+	for _, food in Config.Foods do
+		local amount = newState.inventory[food.id]
+		if amount and amount > 0 then
+			table.insert(carrying, food.emoji .. amount)
+		end
+	end
+	carryingLabel.Text = if #carrying > 0 then table.concat(carrying, "  ") else "Empty — go forage!"
+	backpackLabel.TextColor3 = if newState.carried >= newState.capacity then RED else TEXT
+
+	local multiplier = Config.getEquipmentValue("Gloves", newState.equipment.Gloves or 0)
+	if multiplier ~= glovesMultiplier then
+		glovesMultiplier = multiplier
+		for _, prompt in CollectionService:GetTagged("ForagePrompt") do
+			updateForagePrompt(prompt)
+		end
+	end
+
+	renderGear(false)
 end)
 
 ---------------------------------------------------------------------------
@@ -2892,9 +4131,10 @@ local function fitToScreen(panel: GuiObject, baseSize: Vector2, widthShare: numb
 	screen:GetPropertyChangedSignal("AbsoluteSize"):Connect(update)
 end
 
-fitToScreen(hud, Vector2.new(230, 140), 0.45, 0.35)
+fitToScreen(hud, Vector2.new(230, 184), 0.45, 0.4)
 fitToScreen(penPanel, Vector2.new(340, 440), 1, 1)
 fitToScreen(zooBookPanel, Vector2.new(460, 380), 1, 1)
+fitToScreen(gearPanel, Vector2.new(460, 420), 1, 1)
 
 ---------------------------------------------------------------------------
 -- Close the pen panel when the player walks away from its sign
@@ -2930,6 +4170,8 @@ task.delay(4, function()
 	local onTouch = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
 	local how = if onTouch then "tap the button that pops up" else "press E"
 	showToast("Welcome to your zoo! Walk up to a pen sign and " .. how .. " to manage it.", "info")
+	task.wait(4.5)
+	showToast("Animals need food! Forage it out in the wild and fill each pen's food store.", "info")
 end)
 ]]></string>
           </Properties>

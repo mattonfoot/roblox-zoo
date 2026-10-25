@@ -1,5 +1,5 @@
 --!strict
--- Game balance and animal definitions shared by server and client.
+-- Game balance and definitions shared by server and client.
 
 export type Visual = {
 	shape: string, -- "quadruped" or "biped"
@@ -16,7 +16,8 @@ export type Species = {
 	id: string,
 	name: string,
 	price: number, -- cost to buy a baby
-	feedCost: number, -- cost to feed one animal
+	food: string, -- id of the food it eats
+	mealSize: number, -- food units eaten per meal
 	growTime: number, -- seconds of being fed needed to reach adult
 	income: number, -- coins per second from visitors, adults only
 	sellPrice: number, -- what an adult sells for
@@ -27,6 +28,32 @@ export type Species = {
 	visual: Visual,
 }
 
+export type Food = {
+	id: string,
+	name: string,
+	emoji: string,
+	ring: number, -- which wild ring it grows in (further = rarer)
+	yield: number, -- units gathered per forage
+	harvestTime: number, -- seconds to forage with basic gloves
+}
+
+export type Ring = {
+	name: string,
+	inner: number, -- distance from the centre of the map
+	outer: number,
+	color: Color3,
+	material: Enum.Material,
+}
+
+export type Equipment = {
+	id: string,
+	name: string,
+	emoji: string,
+	description: string,
+	tierNames: { string },
+	values: { number }, -- value at level 0, 1, 2, ... (index = level + 1)
+}
+
 local Config = {}
 
 Config.StartingCoins = 150
@@ -35,9 +62,14 @@ Config.PenSize = 24
 Config.PenPrices = { 0, 0, 200, 500, 1200, 3000, 7000, 15000 }
 Config.MaxPlots = 6
 
+-- Hunger and health
 Config.HungerMax = 100
-Config.HungerDrainPerSecond = 100 / 120 -- a full belly lasts two minutes
+Config.HungerDrainPerSecond = 100 / 240 -- a full belly lasts four minutes
+Config.EatThreshold = 40 -- animals eat from the pen's food store below this
 Config.WellFedThreshold = 50 -- below this, animals grow at half speed
+Config.HealthMax = 100
+Config.StarveDamagePerSecond = 100 / 90 -- a starving animal dies after 90 seconds
+Config.HealthRegenPerSecond = 2
 
 Config.BabyStageEnd = 0.4 -- growth fraction where a baby becomes a juvenile
 Config.StageScale = { Baby = 0.45, Juvenile = 0.7, Adult = 1 }
@@ -52,16 +84,83 @@ Config.BabySellFraction = 0.5 -- non-adults sell for this share of their price
 
 Config.AutosaveInterval = 60
 
+-- Foraging
+Config.StockDistance = 20 -- how close to a pen sign you must be to stock it
+Config.NodesPerFood = 8
+Config.NodeRegrowTime = 20
+Config.ChestsPerRing = { 4, 3, 3, 2 }
+Config.ChestRespawnTime = 45
+Config.ChestCoinRewards = { 60, 200, 600, 1500 } -- when a chest has no upgrade left for you
+
 local function rgb(r: number, g: number, b: number): Color3
 	return Color3.fromRGB(r, g, b)
 end
+
+-- Wild areas around the zoo. Rarer food grows further out.
+Config.Rings = {
+	{ name = "Meadow", inner = 200, outer = 300, color = rgb(140, 195, 95), material = Enum.Material.Grass },
+	{ name = "Plains", inner = 300, outer = 420, color = rgb(195, 185, 105), material = Enum.Material.Grass },
+	{ name = "Forest", inner = 420, outer = 560, color = rgb(60, 115, 55), material = Enum.Material.LeafyGrass },
+	{ name = "Savanna", inner = 560, outer = 720, color = rgb(210, 165, 95), material = Enum.Material.Sand },
+} :: { Ring }
+
+Config.Foods = {
+	{ id = "Carrot", name = "Carrots", emoji = "🥕", ring = 1, yield = 5, harvestTime = 2 },
+	{ id = "Fish", name = "Fish", emoji = "🐟", ring = 1, yield = 5, harvestTime = 2.5 },
+	{ id = "Hay", name = "Hay", emoji = "🌾", ring = 2, yield = 6, harvestTime = 3 },
+	{ id = "Bamboo", name = "Bamboo", emoji = "🎋", ring = 3, yield = 8, harvestTime = 3.5 },
+	{ id = "Meat", name = "Meat", emoji = "🥩", ring = 3, yield = 8, harvestTime = 3.5 },
+	{ id = "Leaves", name = "Acacia Leaves", emoji = "🌿", ring = 4, yield = 10, harvestTime = 4 },
+	{ id = "Melon", name = "Melons", emoji = "🍉", ring = 4, yield = 10, harvestTime = 4 },
+} :: { Food }
+
+Config.FoodById = {} :: { [string]: Food }
+for _, food in Config.Foods do
+	Config.FoodById[food.id] = food
+end
+
+-- Equipment found in chests. Level 0 is what you start with.
+Config.Equipment = {
+	{
+		id = "Gloves",
+		name = "Gloves",
+		emoji = "🧤",
+		description = "Forage faster",
+		tierNames = { "Bare Hands", "Work Gloves", "Sturdy Gloves", "Expert Gloves", "Legendary Gloves" },
+		values = { 1, 0.75, 0.55, 0.4, 0.3 }, -- foraging time multiplier
+	},
+	{
+		id = "Backpack",
+		name = "Backpack",
+		emoji = "🎒",
+		description = "Carry more food",
+		tierNames = { "Small Pouch", "Satchel", "Backpack", "Explorer Pack", "Legendary Pack" },
+		values = { 15, 25, 40, 60, 90 }, -- food units you can carry
+	},
+	{
+		id = "Pantry",
+		name = "Pantry",
+		emoji = "🏠",
+		description = "Bigger pen food stores",
+		tierNames = { "Small Bin", "Crate", "Pantry", "Storehouse", "Legendary Silo" },
+		values = { 30, 50, 80, 120, 180 }, -- food units each pen can store
+	},
+} :: { Equipment }
+
+Config.EquipmentById = {} :: { [string]: Equipment }
+for _, equipment in Config.Equipment do
+	Config.EquipmentById[equipment.id] = equipment
+end
+
+Config.MaxEquipmentLevel = 4
 
 Config.Species = {
 	{
 		id = "Rabbit",
 		name = "Rabbit",
 		price = 40,
-		feedCost = 3,
+		food = "Carrot",
+		mealSize = 1,
 		growTime = 45,
 		income = 1,
 		sellPrice = 90,
@@ -84,7 +183,8 @@ Config.Species = {
 		id = "Penguin",
 		name = "Penguin",
 		price = 120,
-		feedCost = 6,
+		food = "Fish",
+		mealSize = 1,
 		growTime = 75,
 		income = 3,
 		sellPrice = 260,
@@ -107,7 +207,8 @@ Config.Species = {
 		id = "Goat",
 		name = "Goat",
 		price = 300,
-		feedCost = 10,
+		food = "Hay",
+		mealSize = 2,
 		growTime = 100,
 		income = 6,
 		sellPrice = 600,
@@ -130,7 +231,8 @@ Config.Species = {
 		id = "Zebra",
 		name = "Zebra",
 		price = 700,
-		feedCost = 20,
+		food = "Hay",
+		mealSize = 2,
 		growTime = 140,
 		income = 12,
 		sellPrice = 1400,
@@ -153,7 +255,8 @@ Config.Species = {
 		id = "Panda",
 		name = "Panda",
 		price = 1500,
-		feedCost = 35,
+		food = "Bamboo",
+		mealSize = 3,
 		growTime = 180,
 		income = 25,
 		sellPrice = 3000,
@@ -176,7 +279,8 @@ Config.Species = {
 		id = "Lion",
 		name = "Lion",
 		price = 3000,
-		feedCost = 60,
+		food = "Meat",
+		mealSize = 3,
 		growTime = 240,
 		income = 45,
 		sellPrice = 6000,
@@ -199,7 +303,8 @@ Config.Species = {
 		id = "Giraffe",
 		name = "Giraffe",
 		price = 6000,
-		feedCost = 100,
+		food = "Leaves",
+		mealSize = 4,
 		growTime = 300,
 		income = 80,
 		sellPrice = 12000,
@@ -222,7 +327,8 @@ Config.Species = {
 		id = "Elephant",
 		name = "Elephant",
 		price = 12000,
-		feedCost = 180,
+		food = "Melon",
+		mealSize = 5,
 		growTime = 360,
 		income = 150,
 		sellPrice = 24000,
@@ -267,6 +373,11 @@ end
 
 function Config.getPenPrice(penIndex: number): number
 	return Config.PenPrices[penIndex] or math.huge
+end
+
+function Config.getEquipmentValue(equipmentId: string, level: number): number
+	local equipment = Config.EquipmentById[equipmentId]
+	return equipment.values[math.clamp(level, 0, Config.MaxEquipmentLevel) + 1]
 end
 
 return Config

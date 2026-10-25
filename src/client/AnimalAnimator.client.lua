@@ -63,19 +63,32 @@ local function onMarkerAdded(marker: Instance)
 	local yaw = math.random() * math.pi * 2
 	model:PivotTo(CFrame.new(position) * CFrame.Angles(0, yaw, 0))
 
-	-- Hunger bubble shown above hungry animals.
+	-- Bubble above starving or hurt animals: a food icon and a health bar.
 	local hungerGui = Instance.new("BillboardGui")
 	hungerGui.Name = "HungerBubble"
-	hungerGui.Size = UDim2.fromOffset(40, 40)
+	hungerGui.Size = UDim2.fromOffset(60, 52)
 	hungerGui.MaxDistance = 80
 	hungerGui.Adornee = model:FindFirstChild("Body") :: BasePart
-	hungerGui.Enabled = marker:GetAttribute("Hungry") == true
 	local label = Instance.new("TextLabel")
-	label.Size = UDim2.fromScale(1, 1)
+	label.Name = "Icon"
+	label.Size = UDim2.new(1, 0, 0, 36)
 	label.BackgroundTransparency = 1
 	label.TextScaled = true
 	label.Text = "🍖"
 	label.Parent = hungerGui
+	local barBack = Instance.new("Frame")
+	barBack.Name = "HealthBar"
+	barBack.Position = UDim2.fromOffset(4, 40)
+	barBack.Size = UDim2.new(1, -8, 0, 8)
+	barBack.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+	barBack.BorderSizePixel = 0
+	barBack.Parent = hungerGui
+	local barFill = Instance.new("Frame")
+	barFill.Name = "Fill"
+	barFill.Size = UDim2.fromScale(1, 1)
+	barFill.BackgroundColor3 = Color3.fromRGB(220, 60, 60)
+	barFill.BorderSizePixel = 0
+	barFill.Parent = barBack
 	hungerGui.Parent = model
 
 	model.Parent = folder
@@ -93,6 +106,15 @@ local function onMarkerAdded(marker: Instance)
 	tracked[marker] = entry
 	applyStage(entry, (marker:GetAttribute("Stage") :: string?) or "Baby")
 
+	local function updateBubble()
+		local hungry = marker:GetAttribute("Hungry") == true
+		local health = (marker:GetAttribute("Health") :: number?) or 1
+		hungerGui.Enabled = hungry or health < 1
+		label.Text = if hungry then "🍖" else "❤️"
+		barFill.Size = UDim2.fromScale(math.clamp(health, 0, 1), 1)
+	end
+	updateBubble()
+
 	table.insert(
 		entry.connections,
 		marker:GetAttributeChangedSignal("Stage"):Connect(function()
@@ -105,9 +127,10 @@ local function onMarkerAdded(marker: Instance)
 	table.insert(
 		entry.connections,
 		marker:GetAttributeChangedSignal("Hungry"):Connect(function()
-			entry.hungerGui.Enabled = marker:GetAttribute("Hungry") == true
+			updateBubble()
 		end)
 	)
+	table.insert(entry.connections, marker:GetAttributeChangedSignal("Health"):Connect(updateBubble))
 end
 
 local function onMarkerRemoved(marker: Instance)
