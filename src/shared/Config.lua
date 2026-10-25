@@ -145,6 +145,14 @@ Config.Equipment = {
 		tierNames = { "Small Bin", "Crate", "Pantry", "Storehouse", "Legendary Silo" },
 		values = { 30, 50, 80, 120, 180 }, -- food units each pen can store
 	},
+	{
+		id = "Boots",
+		name = "Boots",
+		emoji = "👢",
+		description = "Walk faster",
+		tierNames = { "Old Sneakers", "Trail Shoes", "Hiking Boots", "Explorer Boots", "Legendary Boots" },
+		values = { 16, 19, 22, 26, 30 }, -- walk speed (Roblox default is 16)
+	},
 } :: { Equipment }
 
 Config.EquipmentById = {} :: { [string]: Equipment }

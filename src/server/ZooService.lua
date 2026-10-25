@@ -672,11 +672,21 @@ end
 -- Players
 ---------------------------------------------------------------------------
 
+-- Boots set how fast the player walks.
+local function applyWalkSpeed(zoo: Zoo)
+	local character = zoo.player.Character
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	if humanoid then
+		humanoid.WalkSpeed = Config.getEquipmentValue("Boots", zoo.equipment.Boots or 0)
+	end
+end
+
 local function teleportToPlot(zoo: Zoo, character: Model)
 	local root = character:WaitForChild("HumanoidRootPart", 5)
 	if root and zoos[zoo.player] == zoo then
 		task.wait(0.2) -- let the default spawn finish first
 		character:PivotTo(zoo.plot.entrance)
+		applyWalkSpeed(zoo)
 	end
 end
 
@@ -790,6 +800,7 @@ local function onPlayerAdded(player: Player)
 		end
 	end
 	zoo.loaded = true
+	applyWalkSpeed(zoo)
 	pushState(zoo)
 
 	if not canSave then
@@ -869,6 +880,7 @@ function ZooService.start()
 			return backpackCapacity(zoo)
 		end,
 		changed = function(zoo: any)
+			applyWalkSpeed(zoo)
 			-- Pantry upgrades change every pen's store size.
 			for _, pen in (zoo :: Zoo).pens do
 				refreshPenVisual(zoo, pen)

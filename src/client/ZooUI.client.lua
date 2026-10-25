@@ -802,6 +802,8 @@ local function equipmentEffect(item: Config.Equipment, level: number): string
 		return string.format("Foraging takes %d%% of the time", math.floor(value * 100 + 0.5))
 	elseif item.id == "Backpack" then
 		return string.format("Carry up to %d food", value)
+	elseif item.id == "Boots" then
+		return string.format("Walk speed %d (normal is 16)", value)
 	end
 	return string.format("Each pen stores up to %d food", value)
 end

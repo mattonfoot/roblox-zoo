@@ -34,6 +34,7 @@ Glowing 🎁 chests appear at random spots in the wild and respawn after being o
 - 🧤 **Gloves**: forage faster (down to 30% of the time)
 - 🎒 **Backpack**: carry more food (15 up to 90)
 - 🏠 **Pantry**: bigger food stores in every pen (30 up to 180)
+- 👢 **Boots**: walk faster (speed 16 up to 30, nearly twice as fast)
 
 Each piece has 4 upgrade levels. A chest can only give gear up to its area's level (Meadow 1, Plains 2, Forest 3, Savanna 4), so the best gear is found furthest out. If a chest has nothing better for you, it gives coins instead.
 
