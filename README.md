@@ -32,6 +32,10 @@ Each pen holds up to 3 animals of one kind. You start with 150 coins and 2 free 
 
 The game is built entirely from code: the map, pens and animal models are all made of parts at runtime, so no uploaded assets are needed.
 
+### Quickest: open the included place file
+
+Open `RobloxZoo.rbxlx` (in the repo root) in Roblox Studio and press **Play**, or use **File → Publish to Roblox** to play it on your phone. If you change the code, rebuild this file with Option A.
+
 ### Option A: build a place file
 
 1. Install [Rojo](https://rojo.space) 7.4 (or run `rokit install`).

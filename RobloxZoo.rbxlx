@@ -1,0 +1,2873 @@
+<roblox version="4">
+  <Item class="Lighting" referent="0">
+    <Properties>
+      <string name="Name">Lighting</string>
+      <float name="Brightness">2.5</float>
+      <float name="ClockTime">14</float>
+      <bool name="GlobalShadows">true</bool>
+    </Properties>
+  </Item>
+  <Item class="ReplicatedStorage" referent="1">
+    <Properties>
+      <string name="Name">ReplicatedStorage</string>
+    </Properties>
+    <Item class="Folder" referent="2">
+      <Properties>
+        <string name="Name">Shared</string>
+      </Properties>
+      <Item class="ModuleScript" referent="3">
+        <Properties>
+          <string name="Name">AnimalBuilder</string>
+          <string name="Source"><![CDATA[--!strict
+-- Builds simple blocky animal models out of parts, so the game needs no uploaded assets.
+-- Models are built facing -Z with their feet at y = 0, and the pivot sits on the ground
+-- under the body. That lets Model:ScaleTo grow an animal without lifting it off the floor.
+
+local Config = require(script.Parent.Config)
+
+local AnimalBuilder = {}
+
+local BLACK = Color3.fromRGB(25, 25, 25)
+local WHITE = Color3.fromRGB(245, 245, 245)
+local PINK = Color3.fromRGB(240, 170, 170)
+local ORANGE = Color3.fromRGB(245, 160, 40)
+local BROWN = Color3.fromRGB(120, 75, 35)
+local IVORY = Color3.fromRGB(250, 245, 225)
+
+local function makePart(
+	model: Model,
+	name: string,
+	size: Vector3,
+	cframe: CFrame,
+	color: Color3,
+	shape: Enum.PartType?
+): Part
+	local part = Instance.new("Part")
+	part.Name = name
+	part.Size = size
+	part.CFrame = cframe
+	part.Color = color
+	part.Material = Enum.Material.SmoothPlastic
+	part.TopSurface = Enum.SurfaceType.Smooth
+	part.BottomSurface = Enum.SurfaceType.Smooth
+	part.Anchored = true
+	part.CanCollide = false
+	part.CanQuery = false
+	part.CanTouch = false
+	if shape then
+		part.Shape = shape
+	end
+	part.Parent = model
+	return part
+end
+
+local function at(x: number, y: number, z: number): CFrame
+	return CFrame.new(x, y, z)
+end
+
+local function addEyes(model: Model, head: CFrame, headSize: Vector3)
+	local eyeSize = math.max(0.2, headSize.X * 0.18)
+	local frontZ = -headSize.Z / 2
+	for _, side in { -1, 1 } do
+		makePart(
+			model,
+			"Eye",
+			Vector3.new(eyeSize, eyeSize, eyeSize),
+			head * at(side * headSize.X * 0.25, headSize.Y * 0.15, frontZ),
+			BLACK,
+			Enum.PartType.Ball
+		)
+	end
+end
+
+local function buildQuadruped(model: Model, v: Config.Visual)
+	local body = v.bodySize
+	local legLength = v.legLength
+	local bodyY = legLength + body.Y / 2
+	makePart(model, "Body", body, at(0, bodyY, 0), v.bodyColor)
+
+	-- Legs at the four corners of the body.
+	local legWidth = math.min(body.X, body.Z) * 0.28
+	for _, sx in { -1, 1 } do
+		for _, sz in { -1, 1 } do
+			makePart(
+				model,
+				"Leg",
+				Vector3.new(legWidth, legLength + 0.2, legWidth),
+				at(sx * (body.X / 2 - legWidth / 2), (legLength + 0.2) / 2, sz * (body.Z / 2 - legWidth / 2)),
+				v.legColor
+			)
+		end
+	end
+
+	-- Head, raised on a neck for giraffes.
+	local hasLongNeck = table.find(v.extras, "longNeck") ~= nil
+	local head: CFrame
+	if hasLongNeck then
+		local neckHeight = 4.5
+		local neckBaseZ = -(body.Z / 2 - 0.5)
+		makePart(
+			model,
+			"Neck",
+			Vector3.new(0.9, neckHeight, 0.9),
+			at(0, legLength + body.Y + neckHeight / 2 - 0.6, neckBaseZ) * CFrame.Angles(math.rad(-12), 0, 0),
+			v.bodyColor
+		)
+		head = at(0, legLength + body.Y + neckHeight - 0.2, neckBaseZ - 0.9)
+	else
+		head = at(0, legLength + body.Y * 0.85, -(body.Z / 2 + v.headSize.Z * 0.3))
+	end
+	makePart(model, "Head", v.headSize, head, v.headColor)
+	addEyes(model, head, v.headSize)
+
+	local h = v.headSize
+	for _, extra in v.extras do
+		if extra == "longEars" then
+			for _, side in { -1, 1 } do
+				makePart(
+					model,
+					"Ear",
+					Vector3.new(0.3, 1.4, 0.45),
+					head * at(side * h.X * 0.25, h.Y / 2 + 0.6, 0.1) * CFrame.Angles(0, 0, side * math.rad(-10)),
+					v.headColor
+				)
+				makePart(
+					model,
+					"InnerEar",
+					Vector3.new(0.15, 1.1, 0.05),
+					head * at(side * h.X * 0.25, h.Y / 2 + 0.6, -0.13) * CFrame.Angles(0, 0, side * math.rad(-10)),
+					PINK
+				)
+			end
+		elseif extra == "puffTail" then
+			makePart(model, "Tail", Vector3.new(0.7, 0.7, 0.7), at(0, bodyY + 0.2, body.Z / 2), WHITE, Enum.PartType.Ball)
+		elseif extra == "horns" then
+			for _, side in { -1, 1 } do
+				makePart(
+					model,
+					"Horn",
+					Vector3.new(0.25, 1.0, 0.25),
+					head * at(side * h.X * 0.25, h.Y / 2 + 0.4, 0.3) * CFrame.Angles(math.rad(30), 0, 0),
+					Color3.fromRGB(90, 80, 70)
+				)
+			end
+		elseif extra == "beard" then
+			makePart(
+				model,
+				"Beard",
+				Vector3.new(0.35, 0.7, 0.3),
+				head * at(0, -h.Y / 2 - 0.3, -h.Z * 0.3),
+				Color3.fromRGB(240, 235, 225)
+			)
+		elseif extra == "stripes" then
+			for i = -3, 3 do
+				makePart(
+					model,
+					"Stripe",
+					Vector3.new(body.X + 0.06, body.Y + 0.06, 0.3),
+					at(0, bodyY, i * body.Z / 8),
+					BLACK
+				)
+			end
+			for _, side in { -1, 1 } do
+				makePart(
+					model,
+					"HeadStripe",
+					Vector3.new(0.06, h.Y * 0.8, 0.25),
+					head * at(side * h.X / 2, 0, 0.2),
+					BLACK
+				)
+			end
+		elseif extra == "mane" then
+			makePart(
+				model,
+				"Mane",
+				Vector3.new(0.35, 0.5, body.Z * 0.45),
+				at(0, legLength + body.Y + 0.2, -body.Z * 0.22),
+				BLACK
+			)
+		elseif extra == "roundEars" then
+			for _, side in { -1, 1 } do
+				makePart(
+					model,
+					"Ear",
+					Vector3.new(0.8, 0.8, 0.8),
+					head * at(side * h.X * 0.4, h.Y / 2, 0.2),
+					BLACK,
+					Enum.PartType.Ball
+				)
+			end
+		elseif extra == "eyePatches" then
+			for _, side in { -1, 1 } do
+				makePart(
+					model,
+					"EyePatch",
+					Vector3.new(0.6, 0.7, 0.1),
+					head * at(side * h.X * 0.25, h.Y * 0.12, -h.Z / 2 + 0.02),
+					BLACK
+				)
+			end
+			-- Black shoulder band, like a real panda.
+			makePart(
+				model,
+				"Band",
+				Vector3.new(body.X + 0.06, body.Y + 0.06, body.Z * 0.3),
+				at(0, bodyY, -body.Z * 0.15),
+				BLACK
+			)
+		elseif extra == "lionMane" then
+			makePart(
+				model,
+				"Mane",
+				Vector3.new(h.X * 1.6, h.Y * 1.6, h.Z * 0.9),
+				head * at(0, 0, h.Z * 0.35),
+				BROWN,
+				Enum.PartType.Ball
+			)
+		elseif extra == "tail" then
+			makePart(
+				model,
+				"Tail",
+				Vector3.new(0.25, 0.25, 2.0),
+				at(0, bodyY + 0.2, body.Z / 2 + 0.8) * CFrame.Angles(math.rad(35), 0, 0),
+				v.bodyColor
+			)
+			makePart(model, "TailTip", Vector3.new(0.5, 0.5, 0.5), at(0, bodyY - 0.4, body.Z / 2 + 1.6), BROWN, Enum.PartType.Ball)
+		elseif extra == "spots" then
+			local spotColor = Color3.fromRGB(140, 85, 35)
+			for i = 1, 6 do
+				local side = if i % 2 == 0 then 1 else -1
+				local z = (i - 3.5) * body.Z / 7
+				local y = bodyY + (if i % 3 == 0 then 0.5 else -0.3)
+				makePart(model, "Spot", Vector3.new(0.08, 0.7, 0.7), at(side * (body.X / 2 + 0.02), y, z), spotColor)
+			end
+		elseif extra == "ossicones" then
+			for _, side in { -1, 1 } do
+				makePart(model, "Ossicone", Vector3.new(0.2, 0.6, 0.2), head * at(side * 0.25, h.Y / 2 + 0.3, 0.4), BROWN)
+			end
+		elseif extra == "trunk" then
+			local trunkColor = v.headColor
+			makePart(model, "Trunk", Vector3.new(0.8, 1.6, 0.8), head * at(0, -0.6, -h.Z / 2 - 0.3), trunkColor)
+			makePart(
+				model,
+				"Trunk",
+				Vector3.new(0.6, 1.6, 0.6),
+				head * at(0, -2.0, -h.Z / 2 - 0.5) * CFrame.Angles(math.rad(-15), 0, 0),
+				trunkColor
+			)
+		elseif extra == "bigEars" then
+			for _, side in { -1, 1 } do
+				makePart(
+					model,
+					"Ear",
+					Vector3.new(0.2, 2.6, 2.0),
+					head * at(side * (h.X / 2 + 0.2), 0, 0.4) * CFrame.Angles(0, side * math.rad(-20), 0),
+					v.headColor:Lerp(PINK, 0.15)
+				)
+			end
+		elseif extra == "tusks" then
+			for _, side in { -1, 1 } do
+				makePart(
+					model,
+					"Tusk",
+					Vector3.new(0.25, 0.25, 1.4),
+					head * at(side * 0.6, -h.Y / 2 + 0.2, -h.Z / 2 - 0.4) * CFrame.Angles(math.rad(20), 0, 0),
+					IVORY
+				)
+			end
+		end
+	end
+end
+
+local function buildBiped(model: Model, v: Config.Visual)
+	local body = v.bodySize
+	local legLength = v.legLength
+	local bodyY = legLength + body.Y / 2
+	makePart(model, "Body", body, at(0, bodyY, 0), v.bodyColor)
+
+	for _, side in { -1, 1 } do
+		makePart(
+			model,
+			"Foot",
+			Vector3.new(0.5, legLength + 0.1, 0.8),
+			at(side * body.X * 0.25, (legLength + 0.1) / 2, -0.2),
+			v.legColor
+		)
+	end
+
+	local head = at(0, legLength + body.Y + v.headSize.Y / 2 - 0.1, 0)
+	makePart(model, "Head", v.headSize, head, v.headColor)
+	addEyes(model, head, v.headSize)
+
+	for _, extra in v.extras do
+		if extra == "whiteBelly" then
+			makePart(
+				model,
+				"Belly",
+				Vector3.new(body.X * 0.75, body.Y * 0.8, 0.1),
+				at(0, bodyY - body.Y * 0.05, -body.Z / 2 - 0.01),
+				WHITE
+			)
+		elseif extra == "beak" then
+			makePart(model, "Beak", Vector3.new(0.35, 0.25, 0.6), head * at(0, -0.1, -v.headSize.Z / 2 - 0.25), ORANGE)
+		elseif extra == "flippers" then
+			for _, side in { -1, 1 } do
+				makePart(
+					model,
+					"Flipper",
+					Vector3.new(0.2, body.Y * 0.6, 0.6),
+					at(side * (body.X / 2 + 0.1), bodyY, 0) * CFrame.Angles(0, 0, side * math.rad(15)),
+					v.bodyColor
+				)
+			end
+		end
+	end
+end
+
+function AnimalBuilder.build(speciesId: string): Model
+	local species = Config.SpeciesById[speciesId]
+	assert(species, "Unknown species " .. tostring(speciesId))
+
+	local model = Instance.new("Model")
+	model.Name = species.name
+
+	if species.visual.shape == "biped" then
+		buildBiped(model, species.visual)
+	else
+		buildQuadruped(model, species.visual)
+	end
+
+	model.WorldPivot = CFrame.new()
+	return model
+end
+
+return AnimalBuilder
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="4">
+        <Properties>
+          <string name="Name">Config</string>
+          <string name="Source"><![CDATA[--!strict
+-- Game balance and animal definitions shared by server and client.
+
+export type Visual = {
+	shape: string, -- "quadruped" or "biped"
+	bodyColor: Color3,
+	headColor: Color3,
+	legColor: Color3,
+	bodySize: Vector3,
+	headSize: Vector3,
+	legLength: number,
+	extras: { string },
+}
+
+export type Species = {
+	id: string,
+	name: string,
+	price: number, -- cost to buy a baby
+	feedCost: number, -- cost to feed one animal
+	growTime: number, -- seconds of being fed needed to reach adult
+	income: number, -- coins per second from visitors, adults only
+	sellPrice: number, -- what an adult sells for
+	rating: number, -- zoo rating each adult adds
+	speed: number, -- wander speed in studs/second
+	habitat: Color3, -- pen floor colour
+	habitatMaterial: Enum.Material,
+	visual: Visual,
+}
+
+local Config = {}
+
+Config.StartingCoins = 150
+Config.PenCapacity = 3
+Config.PenSize = 24
+Config.PenPrices = { 0, 0, 200, 500, 1200, 3000, 7000, 15000 }
+Config.MaxPlots = 6
+
+Config.HungerMax = 100
+Config.HungerDrainPerSecond = 100 / 120 -- a full belly lasts two minutes
+Config.WellFedThreshold = 50 -- below this, animals grow at half speed
+
+Config.BabyStageEnd = 0.4 -- growth fraction where a baby becomes a juvenile
+Config.StageScale = { Baby = 0.45, Juvenile = 0.7, Adult = 1 }
+
+Config.BreedCooldown = 60 -- seconds between births in one pen
+Config.BreedChancePerSecond = 1 / 20
+Config.BreedMinHunger = 30
+
+Config.DiscoveryRewardMultiplier = 2 -- first adult of a species pays price * this
+Config.DiscoveryRating = 5 -- rating per species in the Zoo Book
+Config.BabySellFraction = 0.5 -- non-adults sell for this share of their price
+
+Config.AutosaveInterval = 60
+
+local function rgb(r: number, g: number, b: number): Color3
+	return Color3.fromRGB(r, g, b)
+end
+
+Config.Species = {
+	{
+		id = "Rabbit",
+		name = "Rabbit",
+		price = 40,
+		feedCost = 3,
+		growTime = 45,
+		income = 1,
+		sellPrice = 90,
+		rating = 1,
+		speed = 6,
+		habitat = rgb(106, 170, 78),
+		habitatMaterial = Enum.Material.Grass,
+		visual = {
+			shape = "quadruped",
+			bodyColor = rgb(235, 225, 215),
+			headColor = rgb(240, 232, 222),
+			legColor = rgb(225, 215, 205),
+			bodySize = Vector3.new(1.6, 1.4, 2.2),
+			headSize = Vector3.new(1.2, 1.2, 1.2),
+			legLength = 0.5,
+			extras = { "longEars", "puffTail" },
+		},
+	},
+	{
+		id = "Penguin",
+		name = "Penguin",
+		price = 120,
+		feedCost = 6,
+		growTime = 75,
+		income = 3,
+		sellPrice = 260,
+		rating = 2,
+		speed = 3,
+		habitat = rgb(215, 235, 245),
+		habitatMaterial = Enum.Material.Ice,
+		visual = {
+			shape = "biped",
+			bodyColor = rgb(30, 30, 35),
+			headColor = rgb(30, 30, 35),
+			legColor = rgb(245, 160, 40),
+			bodySize = Vector3.new(1.6, 2.4, 1.4),
+			headSize = Vector3.new(1.1, 1.1, 1.1),
+			legLength = 0.3,
+			extras = { "whiteBelly", "beak", "flippers" },
+		},
+	},
+	{
+		id = "Goat",
+		name = "Goat",
+		price = 300,
+		feedCost = 10,
+		growTime = 100,
+		income = 6,
+		sellPrice = 600,
+		rating = 4,
+		speed = 5,
+		habitat = rgb(140, 135, 120),
+		habitatMaterial = Enum.Material.Slate,
+		visual = {
+			shape = "quadruped",
+			bodyColor = rgb(200, 190, 170),
+			headColor = rgb(210, 200, 180),
+			legColor = rgb(170, 160, 140),
+			bodySize = Vector3.new(1.8, 1.8, 3.2),
+			headSize = Vector3.new(1.1, 1.3, 1.5),
+			legLength = 1.6,
+			extras = { "horns", "beard" },
+		},
+	},
+	{
+		id = "Zebra",
+		name = "Zebra",
+		price = 700,
+		feedCost = 20,
+		growTime = 140,
+		income = 12,
+		sellPrice = 1400,
+		rating = 7,
+		speed = 7,
+		habitat = rgb(205, 185, 120),
+		habitatMaterial = Enum.Material.Sand,
+		visual = {
+			shape = "quadruped",
+			bodyColor = rgb(245, 245, 245),
+			headColor = rgb(245, 245, 245),
+			legColor = rgb(240, 240, 240),
+			bodySize = Vector3.new(2.2, 2.2, 4.2),
+			headSize = Vector3.new(1.2, 1.4, 2.0),
+			legLength = 2.4,
+			extras = { "stripes", "mane" },
+		},
+	},
+	{
+		id = "Panda",
+		name = "Panda",
+		price = 1500,
+		feedCost = 35,
+		growTime = 180,
+		income = 25,
+		sellPrice = 3000,
+		rating = 11,
+		speed = 2.5,
+		habitat = rgb(80, 150, 70),
+		habitatMaterial = Enum.Material.LeafyGrass,
+		visual = {
+			shape = "quadruped",
+			bodyColor = rgb(245, 245, 245),
+			headColor = rgb(245, 245, 245),
+			legColor = rgb(25, 25, 25),
+			bodySize = Vector3.new(3.0, 2.8, 3.8),
+			headSize = Vector3.new(2.2, 2.0, 2.0),
+			legLength = 1.2,
+			extras = { "roundEars", "eyePatches" },
+		},
+	},
+	{
+		id = "Lion",
+		name = "Lion",
+		price = 3000,
+		feedCost = 60,
+		growTime = 240,
+		income = 45,
+		sellPrice = 6000,
+		rating = 16,
+		speed = 6,
+		habitat = rgb(215, 180, 100),
+		habitatMaterial = Enum.Material.Sand,
+		visual = {
+			shape = "quadruped",
+			bodyColor = rgb(215, 160, 80),
+			headColor = rgb(225, 170, 90),
+			legColor = rgb(205, 150, 70),
+			bodySize = Vector3.new(2.4, 2.4, 4.4),
+			headSize = Vector3.new(1.8, 1.8, 1.8),
+			legLength = 2.0,
+			extras = { "lionMane", "tail" },
+		},
+	},
+	{
+		id = "Giraffe",
+		name = "Giraffe",
+		price = 6000,
+		feedCost = 100,
+		growTime = 300,
+		income = 80,
+		sellPrice = 12000,
+		rating = 22,
+		speed = 4,
+		habitat = rgb(190, 175, 110),
+		habitatMaterial = Enum.Material.Ground,
+		visual = {
+			shape = "quadruped",
+			bodyColor = rgb(230, 180, 90),
+			headColor = rgb(230, 180, 90),
+			legColor = rgb(220, 170, 85),
+			bodySize = Vector3.new(2.4, 2.6, 4.0),
+			headSize = Vector3.new(1.0, 1.2, 2.0),
+			legLength = 4.0,
+			extras = { "longNeck", "spots", "ossicones" },
+		},
+	},
+	{
+		id = "Elephant",
+		name = "Elephant",
+		price = 12000,
+		feedCost = 180,
+		growTime = 360,
+		income = 150,
+		sellPrice = 24000,
+		rating = 30,
+		speed = 3,
+		habitat = rgb(150, 115, 80),
+		habitatMaterial = Enum.Material.Mud,
+		visual = {
+			shape = "quadruped",
+			bodyColor = rgb(140, 140, 150),
+			headColor = rgb(145, 145, 155),
+			legColor = rgb(130, 130, 140),
+			bodySize = Vector3.new(4.4, 4.0, 6.0),
+			headSize = Vector3.new(2.8, 2.8, 2.4),
+			legLength = 2.8,
+			extras = { "trunk", "bigEars", "tusks" },
+		},
+	},
+} :: { Species }
+
+Config.SpeciesById = {} :: { [string]: Species }
+for _, species in Config.Species do
+	Config.SpeciesById[species.id] = species
+end
+
+function Config.getStage(species: Species, growth: number): string
+	local fraction = growth / species.growTime
+	if fraction >= 1 then
+		return "Adult"
+	elseif fraction >= Config.BabyStageEnd then
+		return "Juvenile"
+	end
+	return "Baby"
+end
+
+function Config.getSellPrice(species: Species, growth: number): number
+	if growth >= species.growTime then
+		return species.sellPrice
+	end
+	return math.floor(species.price * Config.BabySellFraction)
+end
+
+function Config.getPenPrice(penIndex: number): number
+	return Config.PenPrices[penIndex] or math.huge
+end
+
+return Config
+]]></string>
+        </Properties>
+      </Item>
+    </Item>
+  </Item>
+  <Item class="ServerScriptService" referent="5">
+    <Properties>
+      <string name="Name">ServerScriptService</string>
+    </Properties>
+    <Item class="Folder" referent="6">
+      <Properties>
+        <string name="Name">Server</string>
+      </Properties>
+      <Item class="ModuleScript" referent="7">
+        <Properties>
+          <string name="Name">DataService</string>
+          <string name="Source"><![CDATA[--!strict
+-- Loads and saves each player's zoo with DataStoreService.
+-- If DataStores are unavailable (for example in Studio without API access),
+-- the game still runs; progress just isn't saved.
+
+local DataStoreService = game:GetService("DataStoreService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Config = require(ReplicatedStorage.Shared.Config)
+
+export type SavedAnimal = {
+	species: string,
+	growth: number,
+	hunger: number,
+}
+
+export type SavedPen = {
+	unlocked: boolean,
+	animals: { SavedAnimal },
+}
+
+export type SaveData = {
+	version: number,
+	coins: number,
+	pens: { SavedPen },
+	discovered: { [string]: boolean },
+}
+
+local DataService = {}
+
+local DATA_VERSION = 1
+local store: DataStore? = nil
+do
+	local ok, result = pcall(function()
+		return DataStoreService:GetDataStore("ZooTycoon_v1")
+	end)
+	if ok then
+		store = result
+	else
+		warn("[Zoo] DataStore unavailable, progress will not be saved:", result)
+	end
+end
+
+local function key(player: Player): string
+	return "player_" .. player.UserId
+end
+
+function DataService.newData(): SaveData
+	local pens = {}
+	for i = 1, #Config.PenPrices do
+		table.insert(pens, {
+			unlocked = Config.getPenPrice(i) == 0,
+			animals = {},
+		})
+	end
+	return {
+		version = DATA_VERSION,
+		coins = Config.StartingCoins,
+		pens = pens,
+		discovered = {},
+	}
+end
+
+-- Cleans loaded data so bad or old saves can't break the game.
+local function sanitize(raw: any): SaveData
+	local data = DataService.newData()
+	if type(raw) ~= "table" then
+		return data
+	end
+	if type(raw.coins) == "number" and raw.coins == raw.coins then
+		data.coins = math.max(0, math.floor(raw.coins))
+	end
+	if type(raw.discovered) == "table" then
+		for id, value in raw.discovered do
+			if Config.SpeciesById[id] and value == true then
+				data.discovered[id] = true
+			end
+		end
+	end
+	if type(raw.pens) == "table" then
+		for i, pen in data.pens do
+			local rawPen = raw.pens[i]
+			if type(rawPen) == "table" then
+				pen.unlocked = pen.unlocked or rawPen.unlocked == true
+				if pen.unlocked and type(rawPen.animals) == "table" then
+					local penSpecies: string? = nil
+					for _, a in rawPen.animals do
+						if #pen.animals >= Config.PenCapacity then
+							break
+						end
+						local species = if type(a) == "table" then Config.SpeciesById[a.species] else nil
+						-- A pen only ever holds one species.
+						if species and (penSpecies == nil or penSpecies == species.id) then
+							penSpecies = species.id
+							table.insert(pen.animals, {
+								species = species.id,
+								growth = math.clamp(tonumber(a.growth) or 0, 0, species.growTime),
+								hunger = math.clamp(tonumber(a.hunger) or 0, 0, Config.HungerMax),
+							})
+						end
+					end
+				end
+			end
+		end
+	end
+	return data
+end
+
+function DataService.load(player: Player): (SaveData, boolean)
+	if not store then
+		return DataService.newData(), false
+	end
+	local dataStore = store :: DataStore
+	for attempt = 1, 3 do
+		local ok, result = pcall(function()
+			return dataStore:GetAsync(key(player))
+		end)
+		if ok then
+			return sanitize(result), true
+		end
+		warn(string.format("[Zoo] Load attempt %d failed for %s: %s", attempt, player.Name, tostring(result)))
+		task.wait(attempt)
+	end
+	-- Loading failed: play with fresh data but don't save over the real data.
+	return DataService.newData(), false
+end
+
+function DataService.save(player: Player, data: SaveData): boolean
+	if not store then
+		return false
+	end
+	local dataStore = store :: DataStore
+	for attempt = 1, 3 do
+		local ok, err = pcall(function()
+			dataStore:SetAsync(key(player), data, { player.UserId })
+		end)
+		if ok then
+			return true
+		end
+		warn(string.format("[Zoo] Save attempt %d failed for %s: %s", attempt, player.Name, tostring(err)))
+		task.wait(attempt)
+	end
+	return false
+end
+
+return DataService
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="Script" referent="8">
+        <Properties>
+          <string name="Name">Main</string>
+          <token name="RunContext">0</token>
+          <string name="Source"><![CDATA[-- Entry point: starts the zoo game on the server.
+local ZooService = require(script.Parent.ZooService)
+
+ZooService.start()
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="9">
+        <Properties>
+          <string name="Name">WorldBuilder</string>
+          <string name="Source"><![CDATA[--!strict
+-- Builds the map: ground, a central road, and one zoo plot per player slot.
+-- Each plot has 8 fenced pens along a central path, with a sign post per pen.
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Config = require(ReplicatedStorage.Shared.Config)
+
+local WorldBuilder = {}
+
+export type Pen = {
+	index: number,
+	center: CFrame, -- top surface centre of the pen floor
+	floor: Part,
+	trough: Part,
+	troughFill: Part,
+	sign: Part,
+	prompt: ProximityPrompt,
+	statusLabel: TextLabel,
+	animalsFolder: Folder,
+}
+
+export type Plot = {
+	index: number,
+	cframe: CFrame,
+	folder: Folder,
+	entrance: CFrame,
+	ownerLabel: TextLabel,
+	pens: { Pen },
+}
+
+local WOOD = Color3.fromRGB(125, 85, 50)
+local PATH = Color3.fromRGB(190, 170, 140)
+local LOCKED_FLOOR = Color3.fromRGB(95, 95, 95)
+
+local PLOT_WIDTH = 76
+local PLOT_DEPTH = 116
+local PEN_ROW_X = 19 -- distance from the centre path to a pen's centre
+local PEN_ZS = { -40, -12, 16, 44 }
+local FLOOR_TOP = 0.8
+
+local function makePart(props: { [string]: any }): Part
+	local part = Instance.new("Part")
+	part.Anchored = true
+	part.TopSurface = Enum.SurfaceType.Smooth
+	part.BottomSurface = Enum.SurfaceType.Smooth
+	for key, value in props do
+		(part :: any)[key] = value
+	end
+	return part
+end
+
+local function makeLabel(parent: Instance, text: string, textColor: Color3): TextLabel
+	local label = Instance.new("TextLabel")
+	label.Size = UDim2.fromScale(1, 1)
+	label.BackgroundTransparency = 1
+	label.Font = Enum.Font.FredokaOne
+	label.TextScaled = true
+	label.TextColor3 = textColor
+	label.TextStrokeTransparency = 0.4
+	label.Text = text
+	label.Parent = parent
+	return label
+end
+
+function WorldBuilder.buildEnvironment(): Folder
+	local folder = Instance.new("Folder")
+	folder.Name = "Environment"
+
+	makePart({
+		Name = "Ground",
+		Size = Vector3.new(600, 2, 600),
+		CFrame = CFrame.new(0, -1, 0),
+		Color = Color3.fromRGB(95, 155, 70),
+		Material = Enum.Material.Grass,
+		Parent = folder,
+	})
+
+	makePart({
+		Name = "Road",
+		Size = Vector3.new(300, 0.2, 24),
+		CFrame = CFrame.new(0, 0.1, 0),
+		Color = Color3.fromRGB(70, 70, 75),
+		Material = Enum.Material.Asphalt,
+		Parent = folder,
+	})
+
+	local spawn = Instance.new("SpawnLocation")
+	spawn.Name = "Spawn"
+	spawn.Size = Vector3.new(10, 1, 10)
+	spawn.CFrame = CFrame.new(0, 0.5, 0)
+	spawn.Anchored = true
+	spawn.Neutral = true
+	spawn.Duration = 0
+	spawn.Color = Color3.fromRGB(240, 200, 80)
+	spawn.Material = Enum.Material.SmoothPlastic
+	spawn.Parent = folder
+
+	-- A welcome arch across the west end of the road.
+	local welcome = makePart({
+		Name = "WelcomeSign",
+		Size = Vector3.new(24, 6, 1),
+		CFrame = CFrame.new(-140, 14, 0) * CFrame.Angles(0, math.pi / 2, 0),
+		Color = WOOD,
+		Material = Enum.Material.Wood,
+		Parent = folder,
+	})
+	for _, side in { -1, 1 } do
+		makePart({
+			Name = "WelcomePost",
+			Size = Vector3.new(1, 14, 1),
+			CFrame = CFrame.new(-140, 7, side * 11),
+			Color = WOOD,
+			Material = Enum.Material.Wood,
+			Parent = folder,
+		})
+	end
+	for _, face in { Enum.NormalId.Front, Enum.NormalId.Back } do
+		local gui = Instance.new("SurfaceGui")
+		gui.Face = face
+		gui.PixelsPerStud = 40
+		gui.Parent = welcome
+		makeLabel(gui, "🦁 Zoo Tycoon 🐘", Color3.fromRGB(255, 230, 120))
+	end
+
+	folder.Parent = workspace
+	return folder
+end
+
+local function buildFence(parent: Instance, center: CFrame, size: number)
+	local half = size / 2
+	local postSpacing = 4
+	local height = 3.5
+
+	local sides = {
+		{ from = Vector3.new(-half, 0, -half), to = Vector3.new(half, 0, -half) },
+		{ from = Vector3.new(half, 0, -half), to = Vector3.new(half, 0, half) },
+		{ from = Vector3.new(half, 0, half), to = Vector3.new(-half, 0, half) },
+		{ from = Vector3.new(-half, 0, half), to = Vector3.new(-half, 0, -half) },
+	}
+
+	for _, side in sides do
+		local delta = side.to - side.from
+		local length = delta.Magnitude
+		local direction = delta.Unit
+		local posts = math.floor(length / postSpacing)
+		for i = 0, posts - 1 do
+			local p = side.from + direction * (i * postSpacing)
+			makePart({
+				Name = "Post",
+				Size = Vector3.new(0.6, height, 0.6),
+				CFrame = center * CFrame.new(p.X, height / 2, p.Z),
+				Color = WOOD,
+				Material = Enum.Material.Wood,
+				Parent = parent,
+			})
+		end
+		local mid = (side.from + side.to) / 2
+		for _, railY in { 1.2, 2.8 } do
+			local railMid = mid + Vector3.new(0, railY, 0)
+			makePart({
+				Name = "Rail",
+				Size = Vector3.new(0.3, 0.3, length),
+				CFrame = center * CFrame.lookAt(railMid, railMid + direction),
+				Color = WOOD,
+				Material = Enum.Material.Wood,
+				Parent = parent,
+			})
+		end
+	end
+end
+
+local function buildPen(plotFolder: Folder, plotCFrame: CFrame, index: number, side: number, localZ: number): Pen
+	local penFolder = Instance.new("Folder")
+	penFolder.Name = "Pen" .. index
+	penFolder.Parent = plotFolder
+
+	local size = Config.PenSize
+	local localCenter = CFrame.new(side * PEN_ROW_X, 0, localZ)
+	local floorCFrame = plotCFrame * localCenter * CFrame.new(0, FLOOR_TOP - 0.3, 0)
+	local center = plotCFrame * localCenter * CFrame.new(0, FLOOR_TOP, 0)
+
+	local floor = makePart({
+		Name = "Floor",
+		Size = Vector3.new(size, 0.6, size),
+		CFrame = floorCFrame,
+		Color = LOCKED_FLOOR,
+		Material = Enum.Material.Concrete,
+		Parent = penFolder,
+	})
+
+	buildFence(penFolder, center, size)
+
+	-- Feed trough on the path side of the pen.
+	local troughCFrame = center * CFrame.new(-side * (size / 2 - 2.5), 0.5, size / 2 - 5)
+	local trough = makePart({
+		Name = "Trough",
+		Size = Vector3.new(2, 1, 5),
+		CFrame = troughCFrame,
+		Color = WOOD,
+		Material = Enum.Material.WoodPlanks,
+		CanCollide = false,
+		Parent = penFolder,
+	})
+	local troughFill = makePart({
+		Name = "TroughFill",
+		Size = Vector3.new(1.6, 0.2, 4.6),
+		CFrame = troughCFrame * CFrame.new(0, 0.45, 0),
+		Color = Color3.fromRGB(200, 180, 60),
+		Material = Enum.Material.Grass,
+		Transparency = 1,
+		CanCollide = false,
+		Parent = penFolder,
+	})
+
+	-- Sign post on the path, facing the path, holds the interaction prompt.
+	local signBase = plotCFrame * CFrame.new(side * (PEN_ROW_X - size / 2 - 2), 0, localZ)
+	makePart({
+		Name = "SignPost",
+		Size = Vector3.new(0.5, 4, 0.5),
+		CFrame = signBase * CFrame.new(0, 2, 0),
+		Color = WOOD,
+		Material = Enum.Material.Wood,
+		Parent = penFolder,
+	})
+	local sign = makePart({
+		Name = "Sign",
+		Size = Vector3.new(3.5, 2.2, 0.3),
+		-- Face the sign toward the path (the sign's front is its -Z axis).
+		CFrame = signBase * CFrame.new(0, 4.5, 0) * CFrame.Angles(0, side * math.rad(90), 0),
+		Color = Color3.fromRGB(240, 225, 190),
+		Material = Enum.Material.WoodPlanks,
+		Parent = penFolder,
+	})
+	local signGui = Instance.new("SurfaceGui")
+	signGui.Face = Enum.NormalId.Front
+	signGui.PixelsPerStud = 50
+	signGui.Parent = sign
+	makeLabel(signGui, "Pen " .. index, Color3.fromRGB(90, 55, 25))
+
+	local billboard = Instance.new("BillboardGui")
+	billboard.Size = UDim2.fromOffset(220, 50)
+	billboard.StudsOffset = Vector3.new(0, 3, 0)
+	billboard.MaxDistance = 70
+	billboard.Parent = sign
+	local statusLabel = makeLabel(billboard, "", Color3.new(1, 1, 1))
+
+	local prompt = Instance.new("ProximityPrompt")
+	prompt.ActionText = "Manage pen"
+	prompt.ObjectText = "Pen " .. index
+	prompt.KeyboardKeyCode = Enum.KeyCode.E
+	prompt.HoldDuration = 0
+	prompt.MaxActivationDistance = 12
+	prompt.RequiresLineOfSight = false
+	prompt.Parent = sign
+
+	local animalsFolder = Instance.new("Folder")
+	animalsFolder.Name = "Animals"
+	animalsFolder.Parent = penFolder
+
+	return {
+		index = index,
+		center = center,
+		floor = floor,
+		trough = trough,
+		troughFill = troughFill,
+		sign = sign,
+		prompt = prompt,
+		statusLabel = statusLabel,
+		animalsFolder = animalsFolder,
+	}
+end
+
+function WorldBuilder.buildPlot(index: number): Plot
+	-- Three plots north of the road and three south, all opening onto the road.
+	local column = (index - 1) % 3
+	local north = index <= 3
+	local x = (column - 1) * 90
+	local z = if north then -(12 + PLOT_DEPTH / 2) else 12 + PLOT_DEPTH / 2
+	-- The plot's local -Z points at the road.
+	local rotation = if north then math.pi else 0
+	local plotCFrame = CFrame.new(x, 0, z) * CFrame.Angles(0, rotation, 0)
+
+	local folder = Instance.new("Folder")
+	folder.Name = "Plot" .. index
+
+	makePart({
+		Name = "Base",
+		Size = Vector3.new(PLOT_WIDTH, 0.4, PLOT_DEPTH),
+		CFrame = plotCFrame * CFrame.new(0, 0.2, 0),
+		Color = Color3.fromRGB(120, 175, 90),
+		Material = Enum.Material.Grass,
+		Parent = folder,
+	})
+	makePart({
+		Name = "Path",
+		Size = Vector3.new(12, 0.5, PLOT_DEPTH),
+		CFrame = plotCFrame * CFrame.new(0, 0.25, 0),
+		Color = PATH,
+		Material = Enum.Material.Cobblestone,
+		Parent = folder,
+	})
+
+	-- Entrance arch with the owner's name.
+	local archZ = -PLOT_DEPTH / 2 + 1
+	for _, side in { -1, 1 } do
+		makePart({
+			Name = "ArchPost",
+			Size = Vector3.new(1.2, 12, 1.2),
+			CFrame = plotCFrame * CFrame.new(side * 7, 6, archZ),
+			Color = WOOD,
+			Material = Enum.Material.Wood,
+			Parent = folder,
+		})
+	end
+	local archSign = makePart({
+		Name = "ArchSign",
+		Size = Vector3.new(16, 3.5, 0.8),
+		CFrame = plotCFrame * CFrame.new(0, 11, archZ),
+		Color = Color3.fromRGB(60, 120, 60),
+		Material = Enum.Material.SmoothPlastic,
+		Parent = folder,
+	})
+	local ownerLabel: TextLabel? = nil
+	for _, face in { Enum.NormalId.Front, Enum.NormalId.Back } do
+		local gui = Instance.new("SurfaceGui")
+		gui.Face = face
+		gui.PixelsPerStud = 40
+		gui.Parent = archSign
+		local label = makeLabel(gui, "Empty Zoo", Color3.fromRGB(255, 245, 200))
+		if face == Enum.NormalId.Front then
+			ownerLabel = label
+		else
+			-- Keep both faces in sync.
+			label.Name = "BackLabel"
+		end
+	end
+
+	local pens = {}
+	for i, penZ in PEN_ZS do
+		table.insert(pens, buildPen(folder, plotCFrame, i * 2 - 1, -1, penZ))
+		table.insert(pens, buildPen(folder, plotCFrame, i * 2, 1, penZ))
+	end
+
+	folder.Parent = workspace
+
+	return {
+		index = index,
+		cframe = plotCFrame,
+		folder = folder,
+		-- Just inside the arch, facing into the zoo.
+		entrance = plotCFrame * CFrame.new(0, 4, -PLOT_DEPTH / 2 + 6) * CFrame.Angles(0, math.pi, 0),
+		ownerLabel = ownerLabel :: TextLabel,
+		pens = pens,
+	}
+end
+
+function WorldBuilder.setOwnerName(plot: Plot, text: string)
+	plot.ownerLabel.Text = text
+	local archSign = plot.folder:FindFirstChild("ArchSign")
+	if archSign then
+		for _, gui in archSign:GetChildren() do
+			local back = gui:FindFirstChild("BackLabel")
+			if back and back:IsA("TextLabel") then
+				back.Text = text
+			end
+		end
+	end
+end
+
+return WorldBuilder
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="10">
+        <Properties>
+          <string name="Name">ZooService</string>
+          <string name="Source"><![CDATA[--!strict
+-- Core zoo logic: plots, pens, animals, feeding, growth, breeding, income and actions.
+--
+-- The server owns all game state. Each animal is a small "marker" instance
+-- (tagged ZooAnimal) whose attributes hold its species, stage and wander target.
+-- Clients build and animate the actual animal models from those markers, so the
+-- server only sends a few attribute changes instead of moving parts every frame.
+
+local CollectionService = game:GetService("CollectionService")
+local HttpService = game:GetService("HttpService")
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Config = require(ReplicatedStorage.Shared.Config)
+local DataService = require(script.Parent.DataService)
+local WorldBuilder = require(script.Parent.WorldBuilder)
+
+type Species = Config.Species
+
+type Animal = {
+	id: string,
+	species: Species,
+	growth: number,
+	hunger: number,
+	stage: string,
+	marker: Configuration,
+	position: Vector3, -- where the animal is heading (or resting)
+	nextMoveAt: number,
+}
+
+type Pen = {
+	index: number,
+	unlocked: boolean,
+	animals: { Animal },
+	breedCooldown: number,
+	world: WorldBuilder.Pen,
+}
+
+type Zoo = {
+	player: Player,
+	plot: WorldBuilder.Plot,
+	coins: number,
+	pens: { Pen },
+	discovered: { [string]: boolean },
+	canSave: boolean,
+	loaded: boolean,
+	lastActionAt: number,
+	coinsValue: IntValue,
+	ratingValue: IntValue,
+}
+
+local ZooService = {}
+
+local plots: { WorldBuilder.Plot } = {}
+local plotOwners: { [number]: Player } = {}
+local zoos: { [Player]: Zoo } = {}
+
+local remotes: Folder
+local stateUpdate: RemoteEvent
+local openPen: RemoteEvent
+local notifyEvent: RemoteEvent
+local actionEvent: RemoteEvent
+
+local LOCKED_FLOOR = Color3.fromRGB(95, 95, 95)
+local EMPTY_FLOOR = Color3.fromRGB(110, 160, 80)
+
+local function notify(player: Player, text: string, kind: string?)
+	notifyEvent:FireClient(player, text, kind or "info")
+end
+
+local function formatNumber(n: number): string
+	local s = tostring(math.floor(n))
+	local formatted = s:reverse():gsub("(%d%d%d)", "%1,"):reverse()
+	if formatted:sub(1, 1) == "," then
+		formatted = formatted:sub(2)
+	end
+	return formatted
+end
+
+---------------------------------------------------------------------------
+-- State helpers
+---------------------------------------------------------------------------
+
+local function computeRating(zoo: Zoo): number
+	local rating = 0
+	for _, pen in zoo.pens do
+		for _, animal in pen.animals do
+			if animal.stage == "Adult" then
+				rating += animal.species.rating
+			end
+		end
+	end
+	for _ in zoo.discovered do
+		rating += Config.DiscoveryRating
+	end
+	return rating
+end
+
+local function serialize(zoo: Zoo): DataService.SaveData
+	local pens = {}
+	for _, pen in zoo.pens do
+		local animals = {}
+		for _, animal in pen.animals do
+			table.insert(animals, {
+				species = animal.species.id,
+				growth = math.floor(animal.growth * 10) / 10,
+				hunger = math.floor(animal.hunger * 10) / 10,
+			})
+		end
+		table.insert(pens, { unlocked = pen.unlocked, animals = animals })
+	end
+	return {
+		version = 1,
+		coins = math.floor(zoo.coins),
+		pens = pens,
+		discovered = table.clone(zoo.discovered),
+	}
+end
+
+local function penSpecies(pen: Pen): Species?
+	local first = pen.animals[1]
+	return if first then first.species else nil
+end
+
+local function buildClientState(zoo: Zoo)
+	local pens = {}
+	for _, pen in zoo.pens do
+		local animals = {}
+		for _, animal in pen.animals do
+			table.insert(animals, {
+				id = animal.id,
+				species = animal.species.id,
+				stage = animal.stage,
+				growth = math.clamp(animal.growth / animal.species.growTime, 0, 1),
+				hunger = animal.hunger / Config.HungerMax,
+				sellPrice = Config.getSellPrice(animal.species, animal.growth),
+			})
+		end
+		local species = penSpecies(pen)
+		table.insert(pens, {
+			unlocked = pen.unlocked,
+			price = Config.getPenPrice(pen.index),
+			species = if species then species.id else nil,
+			animals = animals,
+		})
+	end
+	return {
+		coins = math.floor(zoo.coins),
+		rating = computeRating(zoo),
+		discovered = zoo.discovered,
+		pens = pens,
+	}
+end
+
+local function pushState(zoo: Zoo)
+	if not zoo.loaded then
+		return
+	end
+	local rating = computeRating(zoo)
+	zoo.coinsValue.Value = math.floor(zoo.coins)
+	zoo.ratingValue.Value = rating
+	stateUpdate:FireClient(zoo.player, buildClientState(zoo))
+end
+
+---------------------------------------------------------------------------
+-- Visuals
+---------------------------------------------------------------------------
+
+local function resetPenVisual(worldPen: WorldBuilder.Pen)
+	worldPen.floor.Color = LOCKED_FLOOR
+	worldPen.floor.Material = Enum.Material.Concrete
+	worldPen.troughFill.Transparency = 1
+	worldPen.statusLabel.Text = ""
+end
+
+local function refreshPenVisual(pen: Pen)
+	local world = pen.world
+	if not pen.unlocked then
+		world.floor.Color = LOCKED_FLOOR
+		world.floor.Material = Enum.Material.Concrete
+		world.troughFill.Transparency = 1
+		world.statusLabel.Text = "🔒 Unlock: " .. formatNumber(Config.getPenPrice(pen.index)) .. " coins"
+		return
+	end
+
+	local species = penSpecies(pen)
+	if not species then
+		world.floor.Color = EMPTY_FLOOR
+		world.floor.Material = Enum.Material.Grass
+		world.troughFill.Transparency = 1
+		world.statusLabel.Text = "Empty pen — buy an animal!"
+		return
+	end
+
+	world.floor.Color = species.habitat
+	world.floor.Material = species.habitatMaterial
+
+	local hungry = 0
+	local totalHunger = 0
+	for _, animal in pen.animals do
+		totalHunger += animal.hunger
+		if animal.hunger <= 0 then
+			hungry += 1
+		end
+	end
+	world.troughFill.Transparency = if totalHunger > 0 then 0 else 1
+
+	local text = string.format("%s ×%d", species.name, #pen.animals)
+	if hungry > 0 then
+		text ..= "  🍖 Hungry!"
+	end
+	world.statusLabel.Text = text
+end
+
+---------------------------------------------------------------------------
+-- Animals
+---------------------------------------------------------------------------
+
+local function randomPointInPen(pen: Pen, species: Species): Vector3
+	-- Keep big animals away from the fence.
+	local margin = math.max(2.5, species.visual.bodySize.Z / 2 + 1.5)
+	local half = Config.PenSize / 2 - margin
+	local offset = Vector3.new((math.random() * 2 - 1) * half, 0, (math.random() * 2 - 1) * half)
+	return pen.world.center:PointToWorldSpace(offset)
+end
+
+local function animalSpeed(animal: Animal): number
+	local speed = animal.species.speed * Config.StageScale[animal.stage]
+	if animal.hunger <= 0 then
+		speed *= 0.4
+	end
+	return math.max(1, speed)
+end
+
+local function updateMarker(animal: Animal)
+	local marker = animal.marker
+	marker:SetAttribute("Stage", animal.stage)
+	marker:SetAttribute("Hungry", animal.hunger <= 0)
+end
+
+local function spawnAnimal(pen: Pen, speciesId: string, growth: number, hunger: number, near: Vector3?): Animal
+	local species = Config.SpeciesById[speciesId]
+	local position = near or randomPointInPen(pen, species)
+
+	local marker = Instance.new("Configuration")
+	marker.Name = species.name
+	local animal: Animal = {
+		id = HttpService:GenerateGUID(false),
+		species = species,
+		growth = growth,
+		hunger = hunger,
+		stage = Config.getStage(species, growth),
+		marker = marker,
+		position = position,
+		nextMoveAt = os.clock() + math.random() * 3,
+	}
+	marker:SetAttribute("Species", species.id)
+	marker:SetAttribute("Target", position)
+	marker:SetAttribute("Speed", animalSpeed(animal))
+	updateMarker(animal)
+	CollectionService:AddTag(marker, "ZooAnimal")
+	marker.Parent = pen.world.animalsFolder
+
+	table.insert(pen.animals, animal)
+	return animal
+end
+
+local function removeAnimal(pen: Pen, animal: Animal)
+	local index = table.find(pen.animals, animal)
+	if index then
+		table.remove(pen.animals, index)
+	end
+	animal.marker:Destroy()
+end
+
+local function wander(pen: Pen, animal: Animal, now: number)
+	if now < animal.nextMoveAt then
+		return
+	end
+	local target = randomPointInPen(pen, animal.species)
+	local speed = animalSpeed(animal)
+	local travelTime = (target - animal.position).Magnitude / speed
+	animal.position = target
+	animal.nextMoveAt = now + travelTime + 1 + math.random() * 4
+	animal.marker:SetAttribute("Speed", speed)
+	animal.marker:SetAttribute("Target", target)
+end
+
+---------------------------------------------------------------------------
+-- Simulation
+---------------------------------------------------------------------------
+
+local function discover(zoo: Zoo, species: Species)
+	if zoo.discovered[species.id] then
+		return
+	end
+	zoo.discovered[species.id] = true
+	local reward = species.price * Config.DiscoveryRewardMultiplier
+	zoo.coins += reward
+	notify(
+		zoo.player,
+		string.format("📖 New in your Zoo Book: %s! +%s coins", species.name, formatNumber(reward)),
+		"success"
+	)
+
+	local count = 0
+	for _ in zoo.discovered do
+		count += 1
+	end
+	if count == #Config.Species then
+		notify(zoo.player, "🏆 You raised every animal! Your Zoo Book is complete!", "success")
+	end
+end
+
+local function tickZoo(zoo: Zoo, dt: number, now: number)
+	local income = 0
+	for _, pen in zoo.pens do
+		local adults = 0
+		local totalHunger = 0
+		for _, animal in pen.animals do
+			local species = animal.species
+			if animal.hunger > 0 then
+				if animal.growth < species.growTime then
+					local rate = if animal.hunger >= Config.WellFedThreshold then 1 else 0.5
+					animal.growth = math.min(species.growTime, animal.growth + dt * rate)
+				else
+					income += species.income * dt
+				end
+			end
+
+			local wasHungry = animal.hunger <= 0
+			animal.hunger = math.max(0, animal.hunger - Config.HungerDrainPerSecond * dt)
+			totalHunger += animal.hunger
+
+			local stage = Config.getStage(species, animal.growth)
+			if stage ~= animal.stage then
+				animal.stage = stage
+				updateMarker(animal)
+				if stage == "Adult" then
+					discover(zoo, species)
+				end
+			elseif wasHungry ~= (animal.hunger <= 0) then
+				updateMarker(animal)
+				if animal.hunger <= 0 then
+					notify(zoo.player, string.format("🍖 Your %s in pen %d is hungry!", species.name, pen.index), "warning")
+				end
+			end
+
+			if animal.stage == "Adult" then
+				adults += 1
+			end
+			wander(pen, animal, now)
+		end
+
+		-- Breeding: two well-fed adults and a free spot can produce a baby.
+		pen.breedCooldown = math.max(0, pen.breedCooldown - dt)
+		local species = penSpecies(pen)
+		if
+			species
+			and adults >= 2
+			and #pen.animals < Config.PenCapacity
+			and pen.breedCooldown <= 0
+			and totalHunger / #pen.animals >= Config.BreedMinHunger
+			and math.random() < Config.BreedChancePerSecond * dt
+		then
+			pen.breedCooldown = Config.BreedCooldown
+			local parent = pen.animals[math.random(1, #pen.animals)]
+			spawnAnimal(pen, species.id, 0, Config.HungerMax, parent.position)
+			notify(zoo.player, string.format("🍼 A baby %s was born in pen %d!", species.name, pen.index), "success")
+		end
+
+		refreshPenVisual(pen)
+	end
+	zoo.coins += income
+end
+
+---------------------------------------------------------------------------
+-- Player actions
+---------------------------------------------------------------------------
+
+local function getPen(zoo: Zoo, penIndex: any): Pen?
+	if type(penIndex) ~= "number" or penIndex ~= math.floor(penIndex) then
+		return nil
+	end
+	return zoo.pens[penIndex]
+end
+
+local function spend(zoo: Zoo, amount: number): boolean
+	if zoo.coins < amount then
+		notify(zoo.player, "Not enough coins! You need " .. formatNumber(amount) .. ".", "error")
+		return false
+	end
+	zoo.coins -= amount
+	return true
+end
+
+local function feedCost(pen: Pen): number
+	local cost = 0
+	for _, animal in pen.animals do
+		if animal.hunger < Config.HungerMax - 1 then
+			cost += animal.species.feedCost
+		end
+	end
+	return cost
+end
+
+local function feedPen(pen: Pen)
+	for _, animal in pen.animals do
+		local wasHungry = animal.hunger <= 0
+		animal.hunger = Config.HungerMax
+		if wasHungry then
+			updateMarker(animal)
+		end
+	end
+	refreshPenVisual(pen)
+end
+
+local actions: { [string]: (zoo: Zoo, ...any) -> () } = {}
+
+function actions.UnlockPen(zoo: Zoo, penIndex: any)
+	local pen = getPen(zoo, penIndex)
+	if not pen or pen.unlocked then
+		return
+	end
+	if spend(zoo, Config.getPenPrice(pen.index)) then
+		pen.unlocked = true
+		refreshPenVisual(pen)
+		notify(zoo.player, string.format("🔓 Pen %d unlocked!", pen.index), "success")
+	end
+end
+
+function actions.BuyAnimal(zoo: Zoo, penIndex: any, speciesId: any)
+	local pen = getPen(zoo, penIndex)
+	local species = type(speciesId) == "string" and Config.SpeciesById[speciesId] or nil
+	if not pen or not species or not pen.unlocked then
+		return
+	end
+	local current = penSpecies(pen)
+	if current and current ~= species then
+		notify(zoo.player, "Each pen can only hold one kind of animal.", "error")
+		return
+	end
+	if #pen.animals >= Config.PenCapacity then
+		notify(zoo.player, "This pen is full!", "error")
+		return
+	end
+	if spend(zoo, species.price) then
+		spawnAnimal(pen, species.id, 0, Config.HungerMax)
+		refreshPenVisual(pen)
+		notify(zoo.player, string.format("🐾 A baby %s joined pen %d!", species.name, pen.index), "success")
+	end
+end
+
+function actions.FeedPen(zoo: Zoo, penIndex: any)
+	local pen = getPen(zoo, penIndex)
+	if not pen or #pen.animals == 0 then
+		return
+	end
+	local cost = feedCost(pen)
+	if cost == 0 then
+		notify(zoo.player, "They're already full!", "info")
+		return
+	end
+	if spend(zoo, cost) then
+		feedPen(pen)
+		notify(zoo.player, string.format("🥕 Fed pen %d for %s coins.", pen.index, formatNumber(cost)), "success")
+	end
+end
+
+function actions.FeedAll(zoo: Zoo)
+	local fed, spent, skipped = 0, 0, 0
+	for _, pen in zoo.pens do
+		local cost = feedCost(pen)
+		if cost > 0 then
+			if zoo.coins >= cost then
+				zoo.coins -= cost
+				spent += cost
+				fed += 1
+				feedPen(pen)
+			else
+				skipped += 1
+			end
+		end
+	end
+	if fed == 0 and skipped == 0 then
+		notify(zoo.player, "Everyone is already full!", "info")
+	elseif skipped > 0 then
+		notify(zoo.player, string.format("Fed %d pens. Not enough coins for %d more.", fed, skipped), "warning")
+	else
+		notify(zoo.player, string.format("🥕 Fed %d pens for %s coins.", fed, formatNumber(spent)), "success")
+	end
+end
+
+function actions.SellAnimal(zoo: Zoo, penIndex: any, animalId: any)
+	local pen = getPen(zoo, penIndex)
+	if not pen or type(animalId) ~= "string" then
+		return
+	end
+	for _, animal in pen.animals do
+		if animal.id == animalId then
+			local price = Config.getSellPrice(animal.species, animal.growth)
+			zoo.coins += price
+			removeAnimal(pen, animal)
+			refreshPenVisual(pen)
+			notify(
+				zoo.player,
+				string.format("💰 Sold a %s for %s coins.", animal.species.name, formatNumber(price)),
+				"success"
+			)
+			return
+		end
+	end
+end
+
+---------------------------------------------------------------------------
+-- Players
+---------------------------------------------------------------------------
+
+local function teleportToPlot(zoo: Zoo, character: Model)
+	local root = character:WaitForChild("HumanoidRootPart", 5)
+	if root and zoos[zoo.player] == zoo then
+		task.wait(0.2) -- let the default spawn finish first
+		character:PivotTo(zoo.plot.entrance)
+	end
+end
+
+local function claimPlot(player: Player): WorldBuilder.Plot?
+	for index, plot in plots do
+		if not plotOwners[index] then
+			plotOwners[index] = player
+			return plot
+		end
+	end
+	return nil
+end
+
+local function releasePlot(zoo: Zoo)
+	for _, pen in zoo.pens do
+		for _, animal in table.clone(pen.animals) do
+			removeAnimal(pen, animal)
+		end
+		resetPenVisual(pen.world)
+		pen.world.prompt:SetAttribute("OwnerUserId", 0)
+	end
+	WorldBuilder.setOwnerName(zoo.plot, "Empty Zoo")
+	plotOwners[zoo.plot.index] = nil
+end
+
+local function onPlayerAdded(player: Player)
+	local plot = claimPlot(player)
+	if not plot then
+		task.delay(3, function()
+			if player.Parent then
+				notify(player, "All zoos are taken on this server. Try another server!", "error")
+			end
+		end)
+		return
+	end
+
+	local leaderstats = Instance.new("Folder")
+	leaderstats.Name = "leaderstats"
+	local coinsValue = Instance.new("IntValue")
+	coinsValue.Name = "Coins"
+	coinsValue.Parent = leaderstats
+	local ratingValue = Instance.new("IntValue")
+	ratingValue.Name = "Rating"
+	ratingValue.Parent = leaderstats
+	leaderstats.Parent = player
+
+	local pens: { Pen } = {}
+	for i, worldPen in plot.pens do
+		table.insert(pens, {
+			index = i,
+			unlocked = false,
+			animals = {},
+			breedCooldown = 0,
+			world = worldPen,
+		})
+		worldPen.prompt:SetAttribute("OwnerUserId", player.UserId)
+	end
+
+	local zoo: Zoo = {
+		player = player,
+		plot = plot,
+		coins = 0,
+		pens = pens,
+		discovered = {},
+		canSave = false,
+		loaded = false,
+		lastActionAt = 0,
+		coinsValue = coinsValue,
+		ratingValue = ratingValue,
+	}
+	zoos[player] = zoo
+	WorldBuilder.setOwnerName(plot, player.DisplayName .. "'s Zoo")
+
+	player.CharacterAdded:Connect(function(character)
+		teleportToPlot(zoo, character)
+	end)
+	if player.Character then
+		task.spawn(teleportToPlot, zoo, player.Character)
+	end
+
+	local data, canSave = DataService.load(player)
+	if zoos[player] ~= zoo then
+		return -- left while loading
+	end
+
+	zoo.coins = data.coins
+	zoo.discovered = data.discovered
+	zoo.canSave = canSave
+	for i, savedPen in data.pens do
+		local pen = pens[i]
+		if pen then
+			pen.unlocked = savedPen.unlocked
+			for _, saved in savedPen.animals do
+				spawnAnimal(pen, saved.species, saved.growth, saved.hunger)
+			end
+			refreshPenVisual(pen)
+		end
+	end
+	zoo.loaded = true
+	pushState(zoo)
+
+	if not canSave then
+		notify(player, "Saving is off in this session, so progress won't be kept.", "warning")
+	end
+end
+
+local function saveZoo(zoo: Zoo)
+	if zoo.canSave and zoo.loaded then
+		DataService.save(zoo.player, serialize(zoo))
+	end
+end
+
+local function onPlayerRemoving(player: Player)
+	local zoo = zoos[player]
+	if not zoo then
+		return
+	end
+	zoos[player] = nil
+	saveZoo(zoo)
+	releasePlot(zoo)
+end
+
+---------------------------------------------------------------------------
+-- Setup
+---------------------------------------------------------------------------
+
+local function createRemotes()
+	remotes = Instance.new("Folder")
+	remotes.Name = "Remotes"
+	local function remote(name: string): RemoteEvent
+		local event = Instance.new("RemoteEvent")
+		event.Name = name
+		event.Parent = remotes
+		return event
+	end
+	stateUpdate = remote("StateUpdate")
+	openPen = remote("OpenPen")
+	notifyEvent = remote("Notify")
+	actionEvent = remote("Action")
+	remotes.Parent = ReplicatedStorage
+end
+
+function ZooService.start()
+	createRemotes()
+	WorldBuilder.buildEnvironment()
+
+	for i = 1, Config.MaxPlots do
+		local plot = WorldBuilder.buildPlot(i)
+		table.insert(plots, plot)
+		for penIndex, worldPen in plot.pens do
+			resetPenVisual(worldPen)
+			worldPen.prompt:SetAttribute("OwnerUserId", 0)
+			CollectionService:AddTag(worldPen.prompt, "PenPrompt")
+			worldPen.prompt.Triggered:Connect(function(player)
+				local zoo = zoos[player]
+				if zoo and zoo.loaded and zoo.plot == plot then
+					openPen:FireClient(player, penIndex)
+				else
+					local owner = plotOwners[i]
+					notify(player, if owner then "This is " .. owner.DisplayName .. "'s zoo!" else "This zoo is empty.", "info")
+				end
+			end)
+		end
+	end
+
+	actionEvent.OnServerEvent:Connect(function(player, actionName, ...)
+		local zoo = zoos[player]
+		if not zoo or not zoo.loaded or type(actionName) ~= "string" then
+			return
+		end
+		local handler = actions[actionName]
+		if not handler then
+			return
+		end
+		local now = os.clock()
+		if now - zoo.lastActionAt < 0.15 then
+			return
+		end
+		zoo.lastActionAt = now
+		handler(zoo, ...)
+		pushState(zoo)
+	end)
+
+	Players.PlayerAdded:Connect(onPlayerAdded)
+	Players.PlayerRemoving:Connect(onPlayerRemoving)
+	for _, player in Players:GetPlayers() do
+		task.spawn(onPlayerAdded, player)
+	end
+
+	-- Simulation tick.
+	task.spawn(function()
+		local last = os.clock()
+		while true do
+			task.wait(1)
+			local now = os.clock()
+			local dt = math.min(now - last, 5)
+			last = now
+			for _, zoo in zoos do
+				if zoo.loaded then
+					tickZoo(zoo, dt, now)
+					pushState(zoo)
+				end
+			end
+		end
+	end)
+
+	-- Autosave.
+	task.spawn(function()
+		while true do
+			task.wait(Config.AutosaveInterval)
+			for _, zoo in zoos do
+				task.spawn(saveZoo, zoo)
+			end
+		end
+	end)
+
+	game:BindToClose(function()
+		local pending = 0
+		for _, zoo in zoos do
+			pending += 1
+			task.spawn(function()
+				saveZoo(zoo)
+				pending -= 1
+			end)
+		end
+		local deadline = os.clock() + 25
+		while pending > 0 and os.clock() < deadline do
+			task.wait(0.1)
+		end
+	end)
+end
+
+return ZooService
+]]></string>
+        </Properties>
+      </Item>
+    </Item>
+  </Item>
+  <Item class="StarterPlayer" referent="11">
+    <Properties>
+      <string name="Name">StarterPlayer</string>
+    </Properties>
+    <Item class="StarterPlayerScripts" referent="12">
+      <Properties>
+        <string name="Name">StarterPlayerScripts</string>
+      </Properties>
+      <Item class="Folder" referent="13">
+        <Properties>
+          <string name="Name">Client</string>
+        </Properties>
+        <Item class="LocalScript" referent="14">
+          <Properties>
+            <string name="Name">AnimalAnimator</string>
+            <string name="Source"><![CDATA[--!strict
+-- Builds and animates animal models on the client.
+-- The server creates a tagged "ZooAnimal" marker per animal with attributes:
+--   Species (string), Stage (string), Hungry (bool), Target (Vector3), Speed (number)
+-- This script turns each marker into a model that walks toward its Target.
+
+local CollectionService = game:GetService("CollectionService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+
+local Config = require(ReplicatedStorage.Shared.Config)
+local AnimalBuilder = require(ReplicatedStorage.Shared.AnimalBuilder)
+
+local camera = workspace.CurrentCamera
+local MAX_ANIMATE_DISTANCE = 300
+
+type Tracked = {
+	marker: Instance,
+	model: Model,
+	position: Vector3,
+	yaw: number,
+	stage: string,
+	hungerGui: BillboardGui,
+	bobClock: number,
+	connections: { RBXScriptConnection },
+}
+
+local tracked: { [Instance]: Tracked } = {}
+
+local folder = Instance.new("Folder")
+folder.Name = "ClientAnimals"
+folder.Parent = workspace
+
+local function applyStage(entry: Tracked, stage: string)
+	entry.stage = stage
+	local scale = Config.StageScale[stage] or 1
+	entry.model:ScaleTo(scale)
+	local species = Config.SpeciesById[entry.marker:GetAttribute("Species") :: string]
+	if species then
+		local v = species.visual
+		local height = v.legLength + v.bodySize.Y + v.headSize.Y
+		if table.find(v.extras, "longNeck") then
+			height += 4.5
+		end
+		-- The bubble is attached to the body, so offset from the body's centre.
+		local bodyCenter = v.legLength + v.bodySize.Y / 2
+		entry.hungerGui.StudsOffsetWorldSpace = Vector3.new(0, (height - bodyCenter) * scale + 1.2, 0)
+	end
+end
+
+local function onMarkerAdded(marker: Instance)
+	if tracked[marker] then
+		return
+	end
+	local speciesId = marker:GetAttribute("Species")
+	if type(speciesId) ~= "string" or not Config.SpeciesById[speciesId] then
+		return
+	end
+	local target = marker:GetAttribute("Target")
+	local position = if typeof(target) == "Vector3" then target else Vector3.zero
+
+	local model = AnimalBuilder.build(speciesId)
+	local yaw = math.random() * math.pi * 2
+	model:PivotTo(CFrame.new(position) * CFrame.Angles(0, yaw, 0))
+
+	-- Hunger bubble shown above hungry animals.
+	local hungerGui = Instance.new("BillboardGui")
+	hungerGui.Name = "HungerBubble"
+	hungerGui.Size = UDim2.fromOffset(40, 40)
+	hungerGui.MaxDistance = 80
+	hungerGui.Adornee = model:FindFirstChild("Body") :: BasePart
+	hungerGui.Enabled = marker:GetAttribute("Hungry") == true
+	local label = Instance.new("TextLabel")
+	label.Size = UDim2.fromScale(1, 1)
+	label.BackgroundTransparency = 1
+	label.TextScaled = true
+	label.Text = "🍖"
+	label.Parent = hungerGui
+	hungerGui.Parent = model
+
+	model.Parent = folder
+
+	local entry: Tracked = {
+		marker = marker,
+		model = model,
+		position = position,
+		yaw = yaw,
+		stage = "Adult",
+		hungerGui = hungerGui,
+		bobClock = math.random() * 10,
+		connections = {},
+	}
+	tracked[marker] = entry
+	applyStage(entry, (marker:GetAttribute("Stage") :: string?) or "Baby")
+
+	table.insert(
+		entry.connections,
+		marker:GetAttributeChangedSignal("Stage"):Connect(function()
+			local stage = marker:GetAttribute("Stage")
+			if type(stage) == "string" and stage ~= entry.stage then
+				applyStage(entry, stage)
+			end
+		end)
+	)
+	table.insert(
+		entry.connections,
+		marker:GetAttributeChangedSignal("Hungry"):Connect(function()
+			entry.hungerGui.Enabled = marker:GetAttribute("Hungry") == true
+		end)
+	)
+end
+
+local function onMarkerRemoved(marker: Instance)
+	local entry = tracked[marker]
+	if not entry then
+		return
+	end
+	tracked[marker] = nil
+	for _, connection in entry.connections do
+		connection:Disconnect()
+	end
+	entry.model:Destroy()
+end
+
+local function angleDifference(a: number, b: number): number
+	return (b - a + math.pi) % (2 * math.pi) - math.pi
+end
+
+RunService.Heartbeat:Connect(function(dt)
+	local cameraPosition = camera.CFrame.Position
+	for marker, entry in tracked do
+		local target = marker:GetAttribute("Target")
+		local speed = marker:GetAttribute("Speed")
+		if typeof(target) ~= "Vector3" or type(speed) ~= "number" then
+			continue
+		end
+
+		local offset = target - entry.position
+		local flat = Vector3.new(offset.X, 0, offset.Z)
+		local distance = flat.Magnitude
+		local moving = distance > 0.05
+
+		if moving then
+			local step = math.min(distance, speed * dt)
+			entry.position += flat.Unit * step
+			-- The model's front is -Z, so this yaw points it along its path.
+			local desiredYaw = math.atan2(-flat.X, -flat.Z)
+			entry.yaw += angleDifference(entry.yaw, desiredYaw) * math.min(1, dt * 8)
+		end
+		-- Keep height in sync with the target (floor top).
+		entry.position = Vector3.new(entry.position.X, target.Y, entry.position.Z)
+
+		if (entry.position - cameraPosition).Magnitude > MAX_ANIMATE_DISTANCE then
+			continue
+		end
+
+		local bob = 0
+		if moving then
+			entry.bobClock += dt * speed * 1.5
+			bob = math.abs(math.sin(entry.bobClock)) * 0.25 * (Config.StageScale[entry.stage] or 1)
+		end
+		entry.model:PivotTo(CFrame.new(entry.position + Vector3.new(0, bob, 0)) * CFrame.Angles(0, entry.yaw, 0))
+	end
+end)
+
+CollectionService:GetInstanceAddedSignal("ZooAnimal"):Connect(onMarkerAdded)
+CollectionService:GetInstanceRemovedSignal("ZooAnimal"):Connect(onMarkerRemoved)
+for _, marker in CollectionService:GetTagged("ZooAnimal") do
+	task.spawn(onMarkerAdded, marker)
+end
+]]></string>
+          </Properties>
+        </Item>
+        <Item class="LocalScript" referent="15">
+          <Properties>
+            <string name="Name">ZooUI</string>
+            <string name="Source"><![CDATA[--!strict
+-- All of the player's on-screen UI: coin/rating HUD, pen manager, Zoo Book and notifications.
+
+local CollectionService = game:GetService("CollectionService")
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TweenService = game:GetService("TweenService")
+
+local Config = require(ReplicatedStorage.Shared.Config)
+
+local player = Players.LocalPlayer
+local remotes = ReplicatedStorage:WaitForChild("Remotes")
+local stateUpdate = remotes:WaitForChild("StateUpdate") :: RemoteEvent
+local openPenEvent = remotes:WaitForChild("OpenPen") :: RemoteEvent
+local notifyEvent = remotes:WaitForChild("Notify") :: RemoteEvent
+local actionEvent = remotes:WaitForChild("Action") :: RemoteEvent
+
+---------------------------------------------------------------------------
+-- Style
+---------------------------------------------------------------------------
+
+local FONT = Enum.Font.FredokaOne
+local PANEL = Color3.fromRGB(250, 243, 225)
+local PANEL_DARK = Color3.fromRGB(230, 215, 185)
+local TEXT = Color3.fromRGB(70, 50, 30)
+local GREEN = Color3.fromRGB(90, 170, 80)
+local ORANGE = Color3.fromRGB(235, 150, 50)
+local RED = Color3.fromRGB(210, 80, 70)
+local BLUE = Color3.fromRGB(70, 140, 210)
+local GREY = Color3.fromRGB(160, 155, 145)
+
+local NOTIFY_COLORS = {
+	info = BLUE,
+	success = GREEN,
+	warning = ORANGE,
+	error = RED,
+}
+
+local function formatNumber(n: number): string
+	local s = tostring(math.floor(n))
+	local formatted = s:reverse():gsub("(%d%d%d)", "%1,"):reverse()
+	if formatted:sub(1, 1) == "," then
+		formatted = formatted:sub(2)
+	end
+	return formatted
+end
+
+local function create(className: string, props: { [string]: any }, children: { any }?): any
+	local instance = Instance.new(className)
+	for key, value in props do
+		if key ~= "Parent" then
+			(instance :: any)[key] = value
+		end
+	end
+	if children then
+		for _, child in children do
+			child.Parent = instance
+		end
+	end
+	if props.Parent then
+		instance.Parent = props.Parent
+	end
+	return instance
+end
+
+local function corner(radius: number?): Instance
+	return create("UICorner", { CornerRadius = UDim.new(0, radius or 10) })
+end
+
+local function padding(px: number): Instance
+	return create("UIPadding", {
+		PaddingTop = UDim.new(0, px),
+		PaddingBottom = UDim.new(0, px),
+		PaddingLeft = UDim.new(0, px),
+		PaddingRight = UDim.new(0, px),
+	})
+end
+
+local function label(props: { [string]: any }): TextLabel
+	local defaults = {
+		BackgroundTransparency = 1,
+		Font = FONT,
+		TextColor3 = TEXT,
+		TextScaled = true,
+		TextXAlignment = Enum.TextXAlignment.Left,
+	}
+	for k, v in props do
+		if k ~= "MaxTextSize" then
+			defaults[k] = v
+		end
+	end
+	return create("TextLabel", defaults, { create("UITextSizeConstraint", { MaxTextSize = props.MaxTextSize or 22 }) })
+end
+
+local function button(text: string, color: Color3, onClick: () -> ()): TextButton
+	local b = create("TextButton", {
+		BackgroundColor3 = color,
+		Font = FONT,
+		Text = text,
+		TextColor3 = Color3.new(1, 1, 1),
+		TextScaled = true,
+		AutoButtonColor = true,
+	}, {
+		corner(8),
+		create("UITextSizeConstraint", { MaxTextSize = 20 }),
+		create("UIPadding", { PaddingLeft = UDim.new(0, 6), PaddingRight = UDim.new(0, 6) }),
+		create("UIStroke", {
+			ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+			Color = color:Lerp(Color3.new(0, 0, 0), 0.3),
+			Thickness = 2,
+		}),
+	})
+	b.Activated:Connect(onClick)
+	return b
+end
+
+local function bar(fill: number, color: Color3, text: string): Frame
+	return create("Frame", {
+		BackgroundColor3 = PANEL_DARK,
+		Size = UDim2.new(1, 0, 0, 16),
+	}, {
+		corner(6),
+		create("Frame", {
+			Name = "Fill",
+			BackgroundColor3 = color,
+			Size = UDim2.fromScale(math.clamp(fill, 0, 1), 1),
+		}, { corner(6) }),
+		label({
+			Name = "Text",
+			Size = UDim2.fromScale(1, 1),
+			Text = text,
+			TextXAlignment = Enum.TextXAlignment.Center,
+			TextColor3 = Color3.new(1, 1, 1),
+			TextStrokeTransparency = 0.5,
+			ZIndex = 2,
+			MaxTextSize = 13,
+		}),
+	})
+end
+
+local function setBar(frame: Instance, fill: number, text: string)
+	local fillFrame = frame:FindFirstChild("Fill") :: Frame
+	fillFrame.Size = UDim2.fromScale(math.clamp(fill, 0, 1), 1)
+	local textLabel = frame:FindFirstChild("Text") :: TextLabel
+	textLabel.Text = text
+end
+
+---------------------------------------------------------------------------
+-- Root and HUD
+---------------------------------------------------------------------------
+
+local screen = create("ScreenGui", {
+	Name = "ZooUI",
+	ResetOnSpawn = false,
+	IgnoreGuiInset = false,
+	ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+	Parent = player:WaitForChild("PlayerGui"),
+})
+
+local hud = create("Frame", {
+	Name = "HUD",
+	BackgroundColor3 = PANEL,
+	Position = UDim2.fromOffset(12, 12),
+	Size = UDim2.fromOffset(230, 140),
+	Parent = screen,
+}, { corner(12), padding(8) })
+
+local coinsLabel = label({
+	Text = "🪙 0",
+	Size = UDim2.new(1, 0, 0, 28),
+	MaxTextSize = 26,
+	Parent = hud,
+})
+local ratingLabel = label({
+	Text = "⭐ Rating 0",
+	Position = UDim2.fromOffset(0, 30),
+	Size = UDim2.new(1, 0, 0, 22),
+	MaxTextSize = 20,
+	Parent = hud,
+})
+
+local zooBookPanel: Frame
+local renderZooBook: () -> ()
+
+local bookButton = button("📖 Zoo Book", BLUE, function()
+	zooBookPanel.Visible = not zooBookPanel.Visible
+	if zooBookPanel.Visible then
+		renderZooBook()
+	end
+end)
+bookButton.Position = UDim2.fromOffset(0, 58)
+bookButton.Size = UDim2.new(1, 0, 0, 30)
+bookButton.Parent = hud
+
+local feedAllButton = button("🥕 Feed all pens", ORANGE, function()
+	actionEvent:FireServer("FeedAll")
+end)
+feedAllButton.Position = UDim2.fromOffset(0, 92)
+feedAllButton.Size = UDim2.new(1, 0, 0, 30)
+feedAllButton.Parent = hud
+
+---------------------------------------------------------------------------
+-- Notifications
+---------------------------------------------------------------------------
+
+local toastList = create("Frame", {
+	Name = "Toasts",
+	BackgroundTransparency = 1,
+	AnchorPoint = Vector2.new(0.5, 1),
+	Position = UDim2.new(0.5, 0, 1, -90),
+	Size = UDim2.fromOffset(420, 300),
+	Parent = screen,
+}, {
+	create("UIListLayout", {
+		SortOrder = Enum.SortOrder.LayoutOrder,
+		VerticalAlignment = Enum.VerticalAlignment.Bottom,
+		HorizontalAlignment = Enum.HorizontalAlignment.Center,
+		Padding = UDim.new(0, 6),
+	}),
+})
+
+local toastOrder = 0
+local function showToast(text: string, kind: string)
+	toastOrder += 1
+	local toast = create("Frame", {
+		BackgroundColor3 = NOTIFY_COLORS[kind] or BLUE,
+		Size = UDim2.new(1, 0, 0, 36),
+		LayoutOrder = toastOrder,
+		Parent = toastList,
+	}, {
+		corner(10),
+		padding(6),
+		label({
+			Text = text,
+			Size = UDim2.fromScale(1, 1),
+			TextColor3 = Color3.new(1, 1, 1),
+			TextXAlignment = Enum.TextXAlignment.Center,
+			MaxTextSize = 18,
+		}),
+	})
+	-- Keep at most 5 on screen.
+	local toasts = {}
+	for _, child in toastList:GetChildren() do
+		if child:IsA("Frame") then
+			table.insert(toasts, child)
+		end
+	end
+	table.sort(toasts, function(a, b)
+		return a.LayoutOrder < b.LayoutOrder
+	end)
+	for i = 1, #toasts - 5 do
+		toasts[i]:Destroy()
+	end
+	task.delay(4, function()
+		if toast.Parent then
+			local tween = TweenService:Create(toast, TweenInfo.new(0.4), { BackgroundTransparency = 1 })
+			tween:Play()
+			tween.Completed:Wait()
+			toast:Destroy()
+		end
+	end)
+end
+
+notifyEvent.OnClientEvent:Connect(function(text: string, kind: string)
+	showToast(text, kind)
+end)
+
+---------------------------------------------------------------------------
+-- Pen panel
+---------------------------------------------------------------------------
+
+type AnimalState = {
+	id: string,
+	species: string,
+	stage: string,
+	growth: number,
+	hunger: number,
+	sellPrice: number,
+}
+type PenState = {
+	unlocked: boolean,
+	price: number,
+	species: string?,
+	animals: { AnimalState },
+}
+type State = {
+	coins: number,
+	rating: number,
+	discovered: { [string]: boolean },
+	pens: { PenState },
+}
+
+local state: State? = nil
+local openPenIndex: number? = nil
+local penSignature = ""
+local animalRows: { [string]: Frame } = {}
+
+local penPanel = create("Frame", {
+	Name = "PenPanel",
+	BackgroundColor3 = PANEL,
+	AnchorPoint = Vector2.new(1, 0.5),
+	Position = UDim2.new(1, -12, 0.5, 0),
+	Size = UDim2.fromOffset(340, 440),
+	Visible = false,
+	Parent = screen,
+}, { corner(14), padding(10), create("UISizeConstraint", { MaxSize = Vector2.new(340, 440) }) })
+
+local penTitle = label({
+	Text = "Pen",
+	Size = UDim2.new(1, -40, 0, 32),
+	MaxTextSize = 26,
+	Parent = penPanel,
+})
+
+local closePenButton = button("✕", RED, function()
+	penPanel.Visible = false
+	openPenIndex = nil
+end)
+closePenButton.AnchorPoint = Vector2.new(1, 0)
+closePenButton.Position = UDim2.new(1, 0, 0, 0)
+closePenButton.Size = UDim2.fromOffset(32, 32)
+closePenButton.Parent = penPanel
+
+local penBody = create("ScrollingFrame", {
+	Name = "Body",
+	BackgroundTransparency = 1,
+	BorderSizePixel = 0,
+	Position = UDim2.fromOffset(0, 40),
+	Size = UDim2.new(1, 0, 1, -40),
+	CanvasSize = UDim2.new(),
+	AutomaticCanvasSize = Enum.AutomaticSize.Y,
+	ScrollBarThickness = 6,
+	ScrollBarImageColor3 = GREY,
+	Parent = penPanel,
+}, {
+	create("UIListLayout", {
+		SortOrder = Enum.SortOrder.LayoutOrder,
+		Padding = UDim.new(0, 8),
+	}),
+})
+
+local function clearBody()
+	for _, child in penBody:GetChildren() do
+		if not child:IsA("UIListLayout") then
+			child:Destroy()
+		end
+	end
+	animalRows = {}
+end
+
+local function addToBody(instance: GuiObject, order: number)
+	instance.LayoutOrder = order
+	instance.Parent = penBody
+end
+
+local function penFeedCost(pen: PenState): number
+	local cost = 0
+	for _, animal in pen.animals do
+		if animal.hunger < 0.99 then
+			cost += Config.SpeciesById[animal.species].feedCost
+		end
+	end
+	return cost
+end
+
+local function buildSpeciesCard(penIndex: number, species: Config.Species, coins: number): Frame
+	local affordable = coins >= species.price
+	local card = create("Frame", {
+		BackgroundColor3 = PANEL_DARK,
+		Size = UDim2.new(1, -8, 0, 64),
+	}, { corner(10), padding(6) })
+	label({
+		Text = species.name,
+		Size = UDim2.new(0.6, 0, 0, 24),
+		Parent = card,
+	})
+	label({
+		Text = string.format(
+			"Adult earns %s/s • grows in %ds",
+			formatNumber(species.income),
+			species.growTime
+		),
+		Position = UDim2.fromOffset(0, 28),
+		Size = UDim2.new(0.62, 0, 0, 22),
+		MaxTextSize = 14,
+		TextColor3 = Color3.fromRGB(110, 90, 70),
+		Parent = card,
+	})
+	local buy = button("🪙 " .. formatNumber(species.price), if affordable then GREEN else GREY, function()
+		actionEvent:FireServer("BuyAnimal", penIndex, species.id)
+	end)
+	buy.AnchorPoint = Vector2.new(1, 0.5)
+	buy.Position = UDim2.new(1, 0, 0.5, 0)
+	buy.Size = UDim2.new(0.36, 0, 0, 40)
+	buy.Parent = card
+	return card
+end
+
+local function buildAnimalRow(penIndex: number, animal: AnimalState): Frame
+	local species = Config.SpeciesById[animal.species]
+	local row = create("Frame", {
+		BackgroundColor3 = PANEL_DARK,
+		Size = UDim2.new(1, -8, 0, 78),
+	}, { corner(10), padding(6) })
+	label({
+		Name = "Title",
+		Text = animal.stage .. " " .. species.name,
+		Size = UDim2.new(0.62, 0, 0, 22),
+		Parent = row,
+	})
+	local growthBar = bar(0, GREEN, "")
+	growthBar.Name = "Growth"
+	growthBar.Position = UDim2.fromOffset(0, 26)
+	growthBar.Size = UDim2.new(0.62, 0, 0, 18)
+	growthBar.Parent = row
+	local hungerBar = bar(0, ORANGE, "")
+	hungerBar.Name = "Hunger"
+	hungerBar.Position = UDim2.fromOffset(0, 48)
+	hungerBar.Size = UDim2.new(0.62, 0, 0, 18)
+	hungerBar.Parent = row
+
+	local sell = button("Sell", RED, function()
+		actionEvent:FireServer("SellAnimal", penIndex, animal.id)
+	end)
+	sell.Name = "Sell"
+	sell.AnchorPoint = Vector2.new(1, 0.5)
+	sell.Position = UDim2.new(1, 0, 0.5, 0)
+	sell.Size = UDim2.new(0.34, 0, 0, 40)
+	sell.Parent = row
+	return row
+end
+
+local function updateAnimalRow(row: Frame, animal: AnimalState)
+	local growthText = if animal.stage == "Adult"
+		then "Fully grown!"
+		else string.format("Growing %d%%", math.floor(animal.growth * 100))
+	setBar(row:FindFirstChild("Growth") :: Frame, animal.growth, growthText)
+	local hungerText = if animal.hunger <= 0 then "Hungry!" else string.format("Food %d%%", math.ceil(animal.hunger * 100))
+	setBar(row:FindFirstChild("Hunger") :: Frame, animal.hunger, hungerText)
+	local sell = row:FindFirstChild("Sell") :: TextButton
+	sell.Text = "Sell 🪙" .. formatNumber(animal.sellPrice)
+	local title = row:FindFirstChild("Title") :: TextLabel
+	title.Text = animal.stage .. " " .. Config.SpeciesById[animal.species].name
+end
+
+local footerButtons: { [string]: TextButton } = {}
+
+local function renderPen()
+	if not openPenIndex or not state then
+		return
+	end
+	local currentState = state :: State
+	local penIndex = openPenIndex :: number
+	local pen = currentState.pens[penIndex]
+	if not pen then
+		return
+	end
+
+	-- Rebuild only when the layout changes; otherwise update text in place so
+	-- buttons keep working while the player clicks them.
+	local parts = { tostring(penIndex), tostring(pen.unlocked), pen.species or "-" }
+	for _, animal in pen.animals do
+		table.insert(parts, animal.id)
+	end
+	if not pen.species or #pen.animals == 0 then
+		-- Shop cards change colour when the player can afford them.
+		for _, species in Config.Species do
+			table.insert(parts, tostring(currentState.coins >= species.price))
+		end
+	end
+	local signature = table.concat(parts, "|")
+	local rebuild = signature ~= penSignature
+	penSignature = signature
+
+	local species = if pen.species then Config.SpeciesById[pen.species] else nil
+	penTitle.Text = if species
+		then string.format("Pen %d — %s", penIndex, species.name)
+		else string.format("Pen %d", penIndex)
+
+	if rebuild then
+		clearBody()
+		footerButtons = {}
+		if not pen.unlocked then
+			addToBody(
+				label({
+					Text = "🔒 This pen is locked. Unlock it to raise more animals!",
+					Size = UDim2.new(1, -8, 0, 48),
+					TextWrapped = true,
+					MaxTextSize = 18,
+				}),
+				1
+			)
+			local unlock = button("Unlock for 🪙 " .. formatNumber(pen.price), GREEN, function()
+				actionEvent:FireServer("UnlockPen", penIndex)
+			end)
+			unlock.Size = UDim2.new(1, -8, 0, 44)
+			addToBody(unlock, 2)
+		elseif #pen.animals == 0 then
+			addToBody(
+				label({
+					Text = "Pick a baby animal to raise. Feed it so it grows into an adult that earns coins from visitors!",
+					Size = UDim2.new(1, -8, 0, 54),
+					TextWrapped = true,
+					MaxTextSize = 15,
+				}),
+				1
+			)
+			for i, s in Config.Species do
+				addToBody(buildSpeciesCard(penIndex, s, currentState.coins), i + 1)
+			end
+		else
+			for i, animal in pen.animals do
+				local row = buildAnimalRow(penIndex, animal)
+				animalRows[animal.id] = row
+				addToBody(row, i)
+			end
+
+			local feed = button("🥕 Feed", ORANGE, function()
+				actionEvent:FireServer("FeedPen", penIndex)
+			end)
+			feed.Size = UDim2.new(1, -8, 0, 40)
+			addToBody(feed, 100)
+			footerButtons.feed = feed
+
+			if species and #pen.animals < Config.PenCapacity then
+				local buyMore = button("", GREEN, function()
+					actionEvent:FireServer("BuyAnimal", penIndex, species.id)
+				end)
+				buyMore.Size = UDim2.new(1, -8, 0, 40)
+				addToBody(buyMore, 101)
+				footerButtons.buyMore = buyMore
+			end
+
+			addToBody(
+				label({
+					Name = "Tip",
+					Text = "",
+					Size = UDim2.new(1, -8, 0, 40),
+					TextWrapped = true,
+					MaxTextSize = 14,
+					TextColor3 = Color3.fromRGB(110, 90, 70),
+				}),
+				102
+			)
+		end
+	end
+
+	-- In-place updates.
+	for _, animal in pen.animals do
+		local row = animalRows[animal.id]
+		if row then
+			updateAnimalRow(row, animal)
+		end
+	end
+	if footerButtons.feed then
+		local cost = penFeedCost(pen)
+		footerButtons.feed.Text = if cost > 0 then "🥕 Feed for 🪙 " .. formatNumber(cost) else "🥕 Everyone is full"
+	end
+	if footerButtons.buyMore and species then
+		footerButtons.buyMore.Text = string.format("Buy another %s 🪙 %s", species.name, formatNumber(species.price))
+	end
+	local tip = penBody:FindFirstChild("Tip") :: TextLabel?
+	if tip and species then
+		local adults = 0
+		for _, animal in pen.animals do
+			if animal.stage == "Adult" then
+				adults += 1
+			end
+		end
+		if #pen.animals >= Config.PenCapacity then
+			tip.Text = "This pen is full. Sell an animal to make room."
+		elseif adults >= 2 then
+			tip.Text = "💕 Two well-fed adults may have a baby soon!"
+		else
+			tip.Text = "Tip: two well-fed adults in a pen can have babies."
+		end
+	end
+end
+
+openPenEvent.OnClientEvent:Connect(function(penIndex: number)
+	openPenIndex = penIndex
+	penSignature = ""
+	penPanel.Visible = true
+	renderPen()
+end)
+
+---------------------------------------------------------------------------
+-- Zoo Book
+---------------------------------------------------------------------------
+
+zooBookPanel = create("Frame", {
+	Name = "ZooBook",
+	BackgroundColor3 = PANEL,
+	AnchorPoint = Vector2.new(0.5, 0.5),
+	Position = UDim2.fromScale(0.5, 0.5),
+	Size = UDim2.fromOffset(460, 380),
+	Visible = false,
+	Parent = screen,
+}, { corner(14), padding(12) })
+
+local bookTitle = label({
+	Text = "📖 Zoo Book",
+	Size = UDim2.new(1, -40, 0, 32),
+	MaxTextSize = 26,
+	Parent = zooBookPanel,
+})
+local closeBook = button("✕", RED, function()
+	zooBookPanel.Visible = false
+end)
+closeBook.AnchorPoint = Vector2.new(1, 0)
+closeBook.Position = UDim2.new(1, 0, 0, 0)
+closeBook.Size = UDim2.fromOffset(32, 32)
+closeBook.Parent = zooBookPanel
+
+label({
+	Text = "Raise each animal to adulthood to fill your Zoo Book. Every new species gives a big coin bonus!",
+	Position = UDim2.fromOffset(0, 36),
+	Size = UDim2.new(1, 0, 0, 36),
+	TextWrapped = true,
+	MaxTextSize = 15,
+	Parent = zooBookPanel,
+})
+
+local bookGrid = create("Frame", {
+	BackgroundTransparency = 1,
+	Position = UDim2.fromOffset(0, 80),
+	Size = UDim2.new(1, 0, 1, -80),
+	Parent = zooBookPanel,
+}, {
+	create("UIGridLayout", {
+		CellSize = UDim2.new(0.25, -6, 0.5, -6),
+		CellPadding = UDim2.fromOffset(6, 6),
+		SortOrder = Enum.SortOrder.LayoutOrder,
+	}),
+})
+
+renderZooBook = function()
+	for _, child in bookGrid:GetChildren() do
+		if not child:IsA("UIGridLayout") then
+			child:Destroy()
+		end
+	end
+	local discovered = if state then state.discovered else {}
+	local count = 0
+	for i, species in Config.Species do
+		local found = discovered[species.id] == true
+		if found then
+			count += 1
+		end
+		create("Frame", {
+			BackgroundColor3 = if found then Color3.fromRGB(200, 230, 180) else PANEL_DARK,
+			LayoutOrder = i,
+			Parent = bookGrid,
+		}, {
+			corner(10),
+			padding(6),
+			create("Frame", {
+				BackgroundColor3 = if found then species.visual.bodyColor else GREY,
+				AnchorPoint = Vector2.new(0.5, 0),
+				Position = UDim2.fromScale(0.5, 0),
+				Size = UDim2.fromScale(0.6, 0.45),
+			}, {
+				corner(30),
+				create("UIAspectRatioConstraint", {}),
+				create("UIStroke", { Color = TEXT, Thickness = 2 }),
+			}),
+			label({
+				Text = if found then species.name else "???",
+				Position = UDim2.fromScale(0, 0.5),
+				Size = UDim2.fromScale(1, 0.25),
+				TextXAlignment = Enum.TextXAlignment.Center,
+				MaxTextSize = 18,
+			}),
+			label({
+				Text = if found then "✔ Raised" else "🪙 " .. formatNumber(species.price),
+				Position = UDim2.fromScale(0, 0.75),
+				Size = UDim2.fromScale(1, 0.22),
+				TextXAlignment = Enum.TextXAlignment.Center,
+				MaxTextSize = 14,
+				TextColor3 = if found then GREEN else Color3.fromRGB(110, 90, 70),
+			}),
+		})
+	end
+	bookTitle.Text = string.format("📖 Zoo Book  %d/%d", count, #Config.Species)
+end
+
+---------------------------------------------------------------------------
+-- State updates
+---------------------------------------------------------------------------
+
+local lastDiscoveredCount = -1
+
+stateUpdate.OnClientEvent:Connect(function(newState: State)
+	state = newState
+	coinsLabel.Text = "🪙 " .. formatNumber(newState.coins)
+	ratingLabel.Text = "⭐ Rating " .. formatNumber(newState.rating)
+
+	local discoveredCount = 0
+	for _ in newState.discovered do
+		discoveredCount += 1
+	end
+	bookButton.Text = string.format("📖 Zoo Book %d/%d", discoveredCount, #Config.Species)
+	if zooBookPanel.Visible and discoveredCount ~= lastDiscoveredCount then
+		renderZooBook()
+	end
+	lastDiscoveredCount = discoveredCount
+
+	if penPanel.Visible then
+		renderPen()
+	end
+end)
+
+---------------------------------------------------------------------------
+-- Only show pen prompts on the player's own zoo
+---------------------------------------------------------------------------
+
+local function watchPrompt(prompt: Instance)
+	if not prompt:IsA("ProximityPrompt") then
+		return
+	end
+	local function update()
+		prompt.Enabled = prompt:GetAttribute("OwnerUserId") == player.UserId
+	end
+	update()
+	prompt:GetAttributeChangedSignal("OwnerUserId"):Connect(update)
+end
+
+CollectionService:GetInstanceAddedSignal("PenPrompt"):Connect(watchPrompt)
+for _, prompt in CollectionService:GetTagged("PenPrompt") do
+	watchPrompt(prompt)
+end
+
+-- First-time hint.
+task.delay(4, function()
+	showToast("Welcome to your zoo! Walk up to a pen sign and press E to manage it.", "info")
+end)
+]]></string>
+          </Properties>
+        </Item>
+      </Item>
+    </Item>
+  </Item>
+</roblox>
